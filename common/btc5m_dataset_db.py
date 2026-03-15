@@ -40,7 +40,11 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             "resolution_rule_version": "TEXT",
             "first_seen_ts": "INTEGER NOT NULL",
             "last_seen_ts": "INTEGER NOT NULL",
+            "last_orderbook_seen_ts": "INTEGER",
             "created_at_ts": "INTEGER NOT NULL",
+            "market_status": "TEXT NOT NULL DEFAULT 'ACTIVE'",
+            "orderbook_exists_yes": "INTEGER NOT NULL DEFAULT 0",
+            "orderbook_exists_no": "INTEGER NOT NULL DEFAULT 0",
             "market_resolution_status": "TEXT NOT NULL DEFAULT 'ACTIVE'",
             "resolved_outcome": "TEXT",
             "resolved_yes_price": "REAL",
@@ -168,6 +172,23 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             "CREATE INDEX IF NOT EXISTS idx_btc5m_reference_ticks_ts ON btc5m_reference_ticks(ts_utc)",
         ),
     },
+    "btc5m_reference_1m_ohlcv": {
+        "columns": {
+            "candle_ts": "INTEGER PRIMARY KEY",
+            "source_name": "TEXT NOT NULL",
+            "symbol": "TEXT NOT NULL",
+            "open": "REAL NOT NULL",
+            "high": "REAL NOT NULL",
+            "low": "REAL NOT NULL",
+            "close": "REAL NOT NULL",
+            "volume": "REAL",
+            "trade_count": "INTEGER",
+            "meta_json": "TEXT",
+        },
+        "indexes": (
+            "CREATE INDEX IF NOT EXISTS idx_btc5m_reference_1m_ohlcv_symbol_ts ON btc5m_reference_1m_ohlcv(symbol, candle_ts)",
+        ),
+    },
     "btc5m_lifecycle_events": {
         "columns": {
             "event_id": "INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -203,6 +224,124 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
         "indexes": (
             "CREATE INDEX IF NOT EXISTS idx_collector_runs_status ON collector_runs(status)",
             "CREATE INDEX IF NOT EXISTS idx_collector_runs_started_ts ON collector_runs(started_ts)",
+        ),
+    },
+    "quality_audits": {
+        "columns": {
+            "audit_id": "INTEGER PRIMARY KEY AUTOINCREMENT",
+            "audit_ts": "INTEGER NOT NULL",
+            "audit_date": "TEXT NOT NULL",
+            "market_id": "TEXT",
+            "run_id": "TEXT",
+            "expected_snapshot_count": "INTEGER",
+            "actual_snapshot_count": "INTEGER",
+            "slot_coverage_ratio": "REAL",
+            "max_gap_sec": "REAL",
+            "invalid_book_ratio": "REAL",
+            "duplicate_snapshot_ratio": "REAL",
+            "missing_reference_ratio": "REAL",
+            "missing_resolution_flag": "INTEGER NOT NULL DEFAULT 0",
+            "reference_sync_gap_sec": "REAL",
+            "audit_status": "TEXT NOT NULL",
+            "notes": "TEXT",
+        },
+        "indexes": (
+            "CREATE INDEX IF NOT EXISTS idx_quality_audits_audit_ts ON quality_audits(audit_ts)",
+            "CREATE INDEX IF NOT EXISTS idx_quality_audits_market_id ON quality_audits(market_id)",
+            "CREATE INDEX IF NOT EXISTS idx_quality_audits_run_id ON quality_audits(run_id)",
+            "CREATE INDEX IF NOT EXISTS idx_quality_audits_status ON quality_audits(audit_status)",
+        ),
+    },
+    "btc5m_features": {
+        "columns": {
+            "feature_id": "INTEGER PRIMARY KEY AUTOINCREMENT",
+            "market_id": "TEXT NOT NULL",
+            "ts_utc": "INTEGER NOT NULL",
+            "seconds_to_resolution": "INTEGER NOT NULL",
+            "return_15s": "REAL",
+            "return_30s": "REAL",
+            "return_60s": "REAL",
+            "return_120s": "REAL",
+            "volatility_30s": "REAL",
+            "volatility_60s": "REAL",
+            "volatility_180s": "REAL",
+            "microprice_yes": "REAL",
+            "microprice_no": "REAL",
+            "order_imbalance_yes": "REAL",
+            "order_imbalance_no": "REAL",
+            "complement_gap": "REAL",
+            "spread_sum": "REAL",
+            "depth_ratio_yes": "REAL",
+            "depth_ratio_no": "REAL",
+            "quote_stability_score": "REAL",
+            "feature_version": "TEXT NOT NULL",
+        },
+        "table_constraints": (
+            "FOREIGN KEY (market_id) REFERENCES btc5m_markets(market_id)",
+        ),
+        "indexes": (
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_btc5m_features_market_ts_version ON btc5m_features(market_id, ts_utc, feature_version)",
+            "CREATE INDEX IF NOT EXISTS idx_btc5m_features_version ON btc5m_features(feature_version)",
+        ),
+    },
+    "btc5m_labels": {
+        "columns": {
+            "label_id": "INTEGER PRIMARY KEY AUTOINCREMENT",
+            "market_id": "TEXT NOT NULL",
+            "decision_ts": "INTEGER NOT NULL",
+            "label_horizon_sec": "INTEGER NOT NULL",
+            "terminal_outcome": "TEXT NOT NULL",
+            "resolved_yes_price": "REAL",
+            "resolved_no_price": "REAL",
+            "mtm_return_if_buy_yes_hold_to_resolution": "REAL",
+            "mtm_return_if_buy_no_hold_to_resolution": "REAL",
+            "best_exit_yes_before_expiry": "REAL",
+            "best_exit_no_before_expiry": "REAL",
+            "would_hit_tp_5c": "INTEGER",
+            "would_hit_tp_10c": "INTEGER",
+            "would_hit_sl_5c": "INTEGER",
+            "would_hit_sl_10c": "INTEGER",
+            "time_to_best_yes_sec": "REAL",
+            "time_to_best_no_sec": "REAL",
+            "label_quality_flag": "TEXT NOT NULL",
+            "label_version": "TEXT NOT NULL",
+        },
+        "table_constraints": (
+            "FOREIGN KEY (market_id) REFERENCES btc5m_markets(market_id)",
+        ),
+        "indexes": (
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_btc5m_labels_market_ts_version ON btc5m_labels(market_id, decision_ts, label_horizon_sec, label_version)",
+            "CREATE INDEX IF NOT EXISTS idx_btc5m_labels_version ON btc5m_labels(label_version)",
+        ),
+    },
+    "btc5m_decision_dataset": {
+        "columns": {
+            "row_id": "INTEGER PRIMARY KEY AUTOINCREMENT",
+            "market_id": "TEXT NOT NULL",
+            "decision_ts": "INTEGER NOT NULL",
+            "seconds_to_resolution": "INTEGER NOT NULL",
+            "market_slug": "TEXT NOT NULL",
+            "mid_yes": "REAL",
+            "mid_no": "REAL",
+            "spread_yes": "REAL",
+            "spread_no": "REAL",
+            "btc_price": "REAL",
+            "quote_stability_score": "REAL",
+            "terminal_outcome": "TEXT",
+            "target_yes_hold": "REAL",
+            "target_no_hold": "REAL",
+            "label_quality_flag": "TEXT",
+            "is_trainable": "INTEGER NOT NULL",
+            "split_bucket": "TEXT NOT NULL",
+            "dataset_version": "TEXT NOT NULL",
+        },
+        "table_constraints": (
+            "FOREIGN KEY (market_id) REFERENCES btc5m_markets(market_id)",
+        ),
+        "indexes": (
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_btc5m_decision_dataset_market_ts_version ON btc5m_decision_dataset(market_id, decision_ts, dataset_version)",
+            "CREATE INDEX IF NOT EXISTS idx_btc5m_decision_dataset_version ON btc5m_decision_dataset(dataset_version)",
+            "CREATE INDEX IF NOT EXISTS idx_btc5m_decision_dataset_split_bucket ON btc5m_decision_dataset(split_bucket)",
         ),
     },
 }
@@ -272,6 +411,21 @@ def upsert_market(conn: sqlite3.Connection, market_row: Mapping[str, Any]) -> in
     return cursor.rowcount
 
 
+def update_market(conn: sqlite3.Connection, market_id: str, updates: Mapping[str, Any]) -> int:
+    prepared = {
+        key: _normalize_value(value)
+        for key, value in updates.items()
+        if key in TABLE_SPECS["btc5m_markets"]["columns"] and key != "market_id"
+    }
+    if not prepared:
+        return 0
+    assignments = ", ".join(f"{column}=?" for column in prepared)
+    values = list(prepared.values()) + [market_id]
+    cursor = conn.execute(f"UPDATE btc5m_markets SET {assignments} WHERE market_id=?", values)
+    conn.commit()
+    return cursor.rowcount
+
+
 def insert_snapshot(conn: sqlite3.Connection, snapshot_row: Mapping[str, Any]) -> int:
     return _insert_row(conn, "btc5m_snapshots", snapshot_row, or_ignore=True)
 
@@ -284,8 +438,16 @@ def insert_reference_tick(conn: sqlite3.Connection, reference_row: Mapping[str, 
     return _insert_row(conn, "btc5m_reference_ticks", reference_row, or_ignore=True)
 
 
+def insert_reference_ohlcv(conn: sqlite3.Connection, candle_row: Mapping[str, Any]) -> int:
+    return _insert_row(conn, "btc5m_reference_1m_ohlcv", candle_row, or_ignore=True)
+
+
 def insert_lifecycle_event(conn: sqlite3.Connection, event_row: Mapping[str, Any]) -> int:
     return _insert_row(conn, "btc5m_lifecycle_events", event_row, or_ignore=False)
+
+
+def insert_quality_audit(conn: sqlite3.Connection, audit_row: Mapping[str, Any]) -> int:
+    return _insert_row(conn, "quality_audits", audit_row, or_ignore=False)
 
 
 def start_collector_run(
@@ -400,6 +562,15 @@ def _market_upsert_assignment(column: str) -> str:
         return "first_seen_ts=MIN(btc5m_markets.first_seen_ts, excluded.first_seen_ts)"
     if column == "last_seen_ts":
         return "last_seen_ts=MAX(btc5m_markets.last_seen_ts, excluded.last_seen_ts)"
+    if column == "last_orderbook_seen_ts":
+        return (
+            "last_orderbook_seen_ts="
+            "CASE "
+            "WHEN excluded.last_orderbook_seen_ts IS NULL THEN btc5m_markets.last_orderbook_seen_ts "
+            "WHEN btc5m_markets.last_orderbook_seen_ts IS NULL THEN excluded.last_orderbook_seen_ts "
+            "ELSE MAX(btc5m_markets.last_orderbook_seen_ts, excluded.last_orderbook_seen_ts) "
+            "END"
+        )
     if column == "created_at_ts":
         return "created_at_ts=btc5m_markets.created_at_ts"
     return f"{column}=COALESCE(excluded.{column}, btc5m_markets.{column})"
