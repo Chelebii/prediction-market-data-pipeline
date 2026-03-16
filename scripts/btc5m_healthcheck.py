@@ -18,21 +18,37 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from common.btc5m_dataset_db import resolve_db_path
+from common.btc5m_dataset_db import resolve_db_path, resolve_repo_path
 from common.bot_notify import send_alert
 from common.single_instance import _is_pid_alive
 
 load_dotenv(ROOT_DIR / "polymarket_scanner" / ".env")
 load_dotenv()
 
-HEALTH_LOG_PATH = Path(os.getenv("BTC5M_HEALTH_LOG_PATH", ROOT_DIR / "runtime" / "logs" / "btc5m_healthcheck.log"))
-STATUS_PATH = Path(os.getenv("BTC5M_HEALTH_STATUS_PATH", ROOT_DIR / "runtime" / "monitoring" / "btc5m_collection_health.json"))
-SNAPSHOT_PATH = Path(
-    os.getenv("BTC_5MIN_SNAPSHOT_PATH", ROOT_DIR / "runtime" / "snapshots" / "btc_5min_clob_snapshot.json")
+HEALTH_LOG_PATH = resolve_repo_path(
+    os.getenv("BTC5M_HEALTH_LOG_PATH"),
+    default_path=ROOT_DIR / "runtime" / "logs" / "btc5m_healthcheck.log",
 )
-SCANNER_LOCK = ROOT_DIR / "polymarket_scanner" / "btc_5min_clob_scanner.lock"
-REFERENCE_LOCK = Path(os.getenv("BTC5M_REFERENCE_LOCK_PATH", ROOT_DIR / "runtime" / "locks" / "btc5m_reference_collector.lock"))
-RESOLUTION_LOCK = Path(os.getenv("BTC5M_RESOLUTION_LOCK_PATH", ROOT_DIR / "runtime" / "locks" / "btc5m_resolution_collector.lock"))
+STATUS_PATH = resolve_repo_path(
+    os.getenv("BTC5M_HEALTH_STATUS_PATH"),
+    default_path=ROOT_DIR / "runtime" / "monitoring" / "btc5m_collection_health.json",
+)
+SNAPSHOT_PATH = resolve_repo_path(
+    os.getenv("BTC_5MIN_SNAPSHOT_PATH"),
+    default_path=ROOT_DIR / "runtime" / "snapshots" / "btc_5min_clob_snapshot.json",
+)
+SCANNER_LOCK = resolve_repo_path(
+    ROOT_DIR / "polymarket_scanner" / "btc_5min_clob_scanner.lock",
+    default_path=ROOT_DIR / "polymarket_scanner" / "btc_5min_clob_scanner.lock",
+)
+REFERENCE_LOCK = resolve_repo_path(
+    os.getenv("BTC5M_REFERENCE_LOCK_PATH"),
+    default_path=ROOT_DIR / "runtime" / "locks" / "btc5m_reference_collector.lock",
+)
+RESOLUTION_LOCK = resolve_repo_path(
+    os.getenv("BTC5M_RESOLUTION_LOCK_PATH"),
+    default_path=ROOT_DIR / "runtime" / "locks" / "btc5m_resolution_collector.lock",
+)
 MAX_SNAPSHOT_AGE_SEC = max(5, int(os.getenv("BTC5M_HEALTH_MAX_SNAPSHOT_AGE_SEC", "45")))
 MAX_REFERENCE_AGE_SEC = max(2, int(os.getenv("BTC5M_HEALTH_MAX_REFERENCE_AGE_SEC", "10")))
 MAX_AUDIT_AGE_SEC = max(60, int(os.getenv("BTC5M_HEALTH_MAX_AUDIT_AGE_SEC", "1800")))

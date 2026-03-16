@@ -840,6 +840,9 @@ def build_snapshot_row(
     no_ask = payload.get("no_ask")
     no_mid = payload.get("no_mid")
     meta = payload.get("meta") or {}
+    structural_book_valid = bool(orderbook_exists_yes) and bool(orderbook_exists_no)
+    publish_valid = bool(payload.get("book_valid"))
+    semantic_reject = bool(reject_reason) and structural_book_valid
     return {
         "market_id": dataset_market_id(payload),
         "market_slug": str(payload.get("market_slug") or ""),
@@ -872,7 +875,7 @@ def build_snapshot_row(
         "price_mid_gap_no_buy": abs(float(no_bid) - float(no_mid)) if no_bid is not None and no_mid is not None else None,
         "price_mid_gap_no_sell": abs(float(no_ask) - float(no_mid)) if no_ask is not None and no_mid is not None else None,
         "quote_stable_pass_count": stable_pass_count,
-        "book_valid": bool(payload.get("book_valid")),
+        "book_valid": structural_book_valid,
         "market_status": str(market_status),
         "orderbook_exists_yes": bool(orderbook_exists_yes if orderbook_exists_yes is not None else (meta.get("yes_book_bid") is not None or meta.get("yes_book_ask") is not None)),
         "orderbook_exists_no": bool(orderbook_exists_no if orderbook_exists_no is not None else (meta.get("no_book_bid") is not None or meta.get("no_book_ask") is not None)),
@@ -886,6 +889,11 @@ def build_snapshot_row(
             "run_id": _dataset_run_id,
             "observation_state": observation_state,
             "status_reason": meta.get("reason"),
+            "validation_flags": {
+                "publish_valid": publish_valid,
+                "structural_book_valid": structural_book_valid,
+                "semantic_reject": semantic_reject,
+            },
             "validation_meta": meta,
             **(extra_meta or {}),
         },
@@ -1304,6 +1312,7 @@ def main():
     exit_status = "STOPPED"
     try:
         while True:
+            loop_started_at = time.perf_counter()
             try:
                 now = time.time()
                 ok = scan_once()
@@ -1332,7 +1341,6 @@ def main():
                             level="WARN",
                         )
                         last_no_data_alert_ts = now
-                time.sleep(SCAN_INTERVAL_SEC)
             except KeyboardInterrupt:
                 exit_status = "STOPPED"
                 raise SystemExit(0)
@@ -1342,7 +1350,10 @@ def main():
                 log(f"Runtime Error: {e}")
                 if error_count <= 3:
                     telegram_alert(f"BTC 5MIN CLOB scanner error: {e}")
-                time.sleep(SCAN_INTERVAL_SEC)
+            elapsed_sec = time.perf_counter() - loop_started_at
+            sleep_sec = max(0.0, float(SCAN_INTERVAL_SEC) - elapsed_sec)
+            if sleep_sec > 0:
+                time.sleep(sleep_sec)
     finally:
         close_dataset_writer(status=exit_status)
 

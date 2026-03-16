@@ -238,6 +238,8 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             "slot_coverage_ratio": "REAL",
             "max_gap_sec": "REAL",
             "invalid_book_ratio": "REAL",
+            "structural_invalid_ratio": "REAL",
+            "semantic_reject_ratio": "REAL",
             "duplicate_snapshot_ratio": "REAL",
             "missing_reference_ratio": "REAL",
             "missing_resolution_flag": "INTEGER NOT NULL DEFAULT 0",
@@ -349,6 +351,20 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
 
 def default_db_path() -> Path:
     return DEFAULT_DB_PATH
+
+
+def resolve_repo_path(
+    path_value: Optional[os.PathLike[str] | str] = None,
+    *,
+    default_path: os.PathLike[str] | str,
+    root_dir: Optional[os.PathLike[str] | str] = None,
+) -> Path:
+    raw_value = str(path_value).strip() if path_value is not None else ""
+    candidate = Path(raw_value or str(default_path)).expanduser()
+    base_dir = Path(root_dir).expanduser() if root_dir is not None else ROOT_DIR
+    if not candidate.is_absolute():
+        candidate = base_dir / candidate
+    return candidate
 
 
 def resolve_db_path(db_path: Optional[os.PathLike[str] | str] = None) -> Path:
