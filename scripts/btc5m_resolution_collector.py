@@ -25,6 +25,7 @@ from common.btc5m_dataset_db import (
     finish_collector_run,
     insert_lifecycle_event,
     resolve_db_path,
+    resolve_repo_path,
     start_collector_run,
     update_collector_run,
     update_market,
@@ -50,8 +51,16 @@ BASE_URL = str(os.getenv("BTC5M_RESOLUTION_BASE_URL", GAMMA_BASE_URL)).strip() o
 INTERVAL_SEC = max(5, int(os.getenv("BTC5M_RESOLUTION_INTERVAL_SEC", "30")))
 TIMEOUT_SEC = max(1, int(os.getenv("BTC5M_RESOLUTION_TIMEOUT_SEC", str(DEFAULT_TIMEOUT_SEC))))
 LOOKBACK_HOURS = max(1, int(os.getenv("BTC5M_RESOLUTION_LOOKBACK_HOURS", "48")))
-LOG_PATH = Path(os.getenv("BTC5M_RESOLUTION_LOG_PATH", ROOT_DIR / "runtime" / "logs" / "btc5m_resolution_collector.log"))
-LOCK_PATH = Path(os.getenv("BTC5M_RESOLUTION_LOCK_PATH", ROOT_DIR / "runtime" / "locks" / "btc5m_resolution_collector.lock"))
+RETRY_COUNT = max(0, int(os.getenv("BTC5M_RESOLUTION_RETRY_COUNT", "1")))
+RETRY_BACKOFF_SEC = max(0.0, float(os.getenv("BTC5M_RESOLUTION_RETRY_BACKOFF_SEC", "0.5")))
+LOG_PATH = resolve_repo_path(
+    os.getenv("BTC5M_RESOLUTION_LOG_PATH"),
+    default_path=ROOT_DIR / "runtime" / "logs" / "btc5m_resolution_collector.log",
+)
+LOCK_PATH = resolve_repo_path(
+    os.getenv("BTC5M_RESOLUTION_LOCK_PATH"),
+    default_path=ROOT_DIR / "runtime" / "locks" / "btc5m_resolution_collector.lock",
+)
 
 _logger = logging.getLogger("btc5m_resolution_collector")
 _logger.setLevel(logging.INFO)
@@ -166,6 +175,17 @@ def insert_lifecycle_event_if_missing(
 
 
 def update_run_metrics(conn: sqlite3.Connection, run_id: str, stats: dict[str, int]) -> None:
+    meta_json: dict[str, Any] = {
+        "resolved_count": stats["resolved_count"],
+        "pending_count": stats["pending_count"],
+        "cancelled_count": stats["cancelled_count"],
+        "mismatch_count": stats["mismatch_count"],
+        "active_count": stats["active_count"],
+    }
+    if stats.get("last_error_ts") is not None:
+        meta_json["last_error_ts"] = int(stats["last_error_ts"])
+    if stats.get("last_error_reason"):
+        meta_json["last_error_reason"] = str(stats["last_error_reason"])
     update_collector_run(
         conn,
         run_id,
@@ -173,13 +193,7 @@ def update_run_metrics(conn: sqlite3.Connection, run_id: str, stats: dict[str, i
             "market_count": stats["processed_count"],
             "error_count": stats["error_count"],
             "status": "RUNNING",
-            "meta_json": {
-                "resolved_count": stats["resolved_count"],
-                "pending_count": stats["pending_count"],
-                "cancelled_count": stats["cancelled_count"],
-                "mismatch_count": stats["mismatch_count"],
-                "active_count": stats["active_count"],
-            },
+            "meta_json": meta_json,
         },
     )
 
@@ -197,6 +211,8 @@ def process_market(
         market_slug=slug,
         base_url=BASE_URL,
         timeout_sec=TIMEOUT_SEC,
+        retry_count=RETRY_COUNT,
+        retry_backoff_sec=RETRY_BACKOFF_SEC,
     )
     decision = derive_resolution_decision(
         db_market,
@@ -249,6 +265,8 @@ def main() -> None:
             "source_name": SOURCE_NAME,
             "base_url": BASE_URL,
             "lookback_hours": args.lookback_hours,
+            "retry_count": RETRY_COUNT,
+            "retry_backoff_sec": RETRY_BACKOFF_SEC,
             "log_path": str(LOG_PATH),
             "db_path": str(resolve_db_path()),
             "market_slug": str(args.market_slug or ""),
@@ -263,12 +281,14 @@ def main() -> None:
         "mismatch_count": 0,
         "active_count": 0,
         "error_count": 0,
+        "last_error_ts": None,
+        "last_error_reason": None,
     }
     exit_status = "STOPPED"
 
     log(
-        "Resolution collector started | source=%s | interval=%ss | lookback=%sh | db=%s"
-        % (SOURCE_NAME, INTERVAL_SEC, args.lookback_hours, resolve_db_path())
+        "Resolution collector started | source=%s | interval=%ss | lookback=%sh | retry=%s | db=%s"
+        % (SOURCE_NAME, INTERVAL_SEC, args.lookback_hours, RETRY_COUNT, resolve_db_path())
     )
 
     try:
@@ -305,6 +325,8 @@ def main() -> None:
                     raise SystemExit(0)
                 except ResolutionFeedError as exc:
                     stats["error_count"] += 1
+                    stats["last_error_ts"] = int(time.time())
+                    stats["last_error_reason"] = str(exc)
                     update_run_metrics(conn, run_id, stats)
                     log(f"WARN resolution_fetch_failed | slug={market_row['market_slug']} | reason={exc}")
                     if args.once:
@@ -312,6 +334,8 @@ def main() -> None:
                         raise SystemExit(1)
                 except Exception as exc:
                     stats["error_count"] += 1
+                    stats["last_error_ts"] = int(time.time())
+                    stats["last_error_reason"] = str(exc)
                     update_run_metrics(conn, run_id, stats)
                     log(f"Runtime Error | slug={market_row['market_slug']} | reason={exc}")
                     if args.once:
@@ -335,11 +359,15 @@ def main() -> None:
                 "source_name": SOURCE_NAME,
                 "base_url": BASE_URL,
                 "lookback_hours": args.lookback_hours,
+                "retry_count": RETRY_COUNT,
+                "retry_backoff_sec": RETRY_BACKOFF_SEC,
                 "resolved_count": stats["resolved_count"],
                 "pending_count": stats["pending_count"],
                 "cancelled_count": stats["cancelled_count"],
                 "mismatch_count": stats["mismatch_count"],
                 "active_count": stats["active_count"],
+                "last_error_ts": stats["last_error_ts"],
+                "last_error_reason": stats["last_error_reason"],
                 "market_slug": str(args.market_slug or ""),
                 "log_path": str(LOG_PATH),
                 "db_path": str(resolve_db_path()),

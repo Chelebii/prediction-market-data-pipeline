@@ -19,6 +19,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from common.btc5m_dataset_db import resolve_db_path, resolve_repo_path
+from common.btc5m_ops_status import latest_operational_audit_window
 from common.bot_notify import send_alert
 from common.single_instance import _is_pid_alive
 
@@ -54,6 +55,7 @@ MAX_REFERENCE_AGE_SEC = max(2, int(os.getenv("BTC5M_HEALTH_MAX_REFERENCE_AGE_SEC
 MAX_AUDIT_AGE_SEC = max(60, int(os.getenv("BTC5M_HEALTH_MAX_AUDIT_AGE_SEC", "1800")))
 ALERT_DEDUPE_SEC = max(60, int(os.getenv("BTC5M_HEALTH_ALERT_DEDUPE_SEC", "1800")))
 STARTUP_GRACE_SEC = max(0, int(os.getenv("BTC5M_HEALTH_STARTUP_GRACE_SEC", "900")))
+OPERATIONAL_AUDIT_WINDOW_MARKETS = max(3, int(os.getenv("BTC5M_OPERATIONAL_AUDIT_WINDOW_MARKETS", "12")))
 BOT_LABEL = "BTC5M-DATA"
 
 LOGGER = logging.getLogger("btc5m_healthcheck")
@@ -115,7 +117,7 @@ def safe_age(now_ts: int, ts_value: Any) -> int | None:
 
 def latest_audit_summary(conn: sqlite3.Connection) -> sqlite3.Row | None:
     return conn.execute(
-        "SELECT audit_ts, audit_status, notes, slot_coverage_ratio, max_gap_sec "
+        "SELECT run_id, audit_ts, audit_status, notes, slot_coverage_ratio, max_gap_sec "
         "FROM quality_audits WHERE market_id IS NULL ORDER BY audit_ts DESC, audit_id DESC LIMIT 1"
     ).fetchone()
 
@@ -157,6 +159,7 @@ def build_status() -> tuple[dict[str, Any], list[str]]:
         "latest_audit_age_sec": None,
         "latest_audit_status": None,
         "latest_audit_notes": None,
+        "operational_audit": None,
         "issues": [],
     }
 
@@ -197,6 +200,10 @@ def build_status() -> tuple[dict[str, Any], list[str]]:
             status["latest_audit_notes"] = audit_row["notes"]
             status["latest_audit_slot_coverage_ratio"] = audit_row["slot_coverage_ratio"]
             status["latest_audit_max_gap_sec"] = audit_row["max_gap_sec"]
+            status["operational_audit"] = latest_operational_audit_window(
+                conn,
+                window_markets=OPERATIONAL_AUDIT_WINDOW_MARKETS,
+            )
 
         if latest_snapshot_age is None:
             issues.append("no_snapshot_rows_yet")
@@ -213,7 +220,10 @@ def build_status() -> tuple[dict[str, Any], list[str]]:
         elif latest_audit_age is not None and latest_audit_age > MAX_AUDIT_AGE_SEC:
             issues.append(f"audit_stale:{latest_audit_age}s")
         status["warnings"] = []
-        if audit_row and str(audit_row["audit_status"] or "") == "FAIL":
+        operational_status = None
+        if status.get("operational_audit"):
+            operational_status = str(status["operational_audit"].get("status") or "")
+        if audit_row and str(audit_row["audit_status"] or "") == "FAIL" and operational_status != "PASS":
             status["warnings"].append("latest_audit_failed")
     finally:
         conn.close()

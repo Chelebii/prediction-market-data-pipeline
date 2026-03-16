@@ -47,42 +47,62 @@ def fetch_gamma_market_by_slug(
     market_slug: str,
     base_url: str = GAMMA_BASE_URL,
     timeout_sec: int = DEFAULT_TIMEOUT_SEC,
+    retry_count: int = 1,
+    retry_backoff_sec: float = 0.5,
 ) -> dict[str, Any]:
     slug = str(market_slug or "").strip()
     if not slug:
         raise ResolutionFeedError("market_slug_missing")
 
-    started_at = time.perf_counter()
-    response = session.get(
-        f"{base_url.rstrip('/')}{MARKETS_ENDPOINT}",
-        params={"slug": slug},
-        timeout=timeout_sec,
-    )
-    latency_ms = _elapsed_ms(started_at)
-    if response.status_code != 200:
-        raise ResolutionFeedError(f"gamma_http_{response.status_code}")
+    last_error: Optional[str] = None
+    attempts = max(1, int(retry_count) + 1)
+    for attempt_idx in range(attempts):
+        started_at = time.perf_counter()
+        try:
+            response = session.get(
+                f"{base_url.rstrip('/')}{MARKETS_ENDPOINT}",
+                params={"slug": slug},
+                timeout=timeout_sec,
+            )
+        except requests.RequestException as exc:
+            last_error = f"gamma_request_failed:{exc.__class__.__name__}"
+            if attempt_idx + 1 >= attempts:
+                raise ResolutionFeedError(last_error) from exc
+            time.sleep(max(0.0, float(retry_backoff_sec)))
+            continue
 
-    try:
-        payload = response.json()
-    except Exception as exc:
-        raise ResolutionFeedError(f"gamma_json_decode_failed:{exc}") from exc
+        latency_ms = _elapsed_ms(started_at)
+        if response.status_code != 200:
+            last_error = f"gamma_http_{response.status_code}"
+            if response.status_code >= 500 and attempt_idx + 1 < attempts:
+                time.sleep(max(0.0, float(retry_backoff_sec)))
+                continue
+            raise ResolutionFeedError(last_error)
 
-    if not isinstance(payload, list) or not payload:
-        raise ResolutionFeedError("market_not_found")
+        try:
+            payload = response.json()
+        except Exception as exc:
+            raise ResolutionFeedError(f"gamma_json_decode_failed:{exc}") from exc
 
-    market = payload[0]
-    if not isinstance(market, dict):
-        raise ResolutionFeedError("market_payload_invalid")
+        if not isinstance(payload, list) or not payload:
+            raise ResolutionFeedError("market_not_found")
 
-    return {
-        "market": market,
-        "fetch_meta": {
-            "base_url": base_url,
-            "endpoint": MARKETS_ENDPOINT,
-            "market_slug": slug,
-            "latency_ms": latency_ms,
-        },
-    }
+        market = payload[0]
+        if not isinstance(market, dict):
+            raise ResolutionFeedError("market_payload_invalid")
+
+        return {
+            "market": market,
+            "fetch_meta": {
+                "base_url": base_url,
+                "endpoint": MARKETS_ENDPOINT,
+                "market_slug": slug,
+                "latency_ms": latency_ms,
+                "retry_count": attempt_idx,
+            },
+        }
+
+    raise ResolutionFeedError(last_error or "gamma_fetch_failed")
 
 
 def derive_resolution_decision(

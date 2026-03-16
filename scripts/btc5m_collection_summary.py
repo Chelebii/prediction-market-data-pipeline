@@ -18,6 +18,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from common.btc5m_dataset_db import resolve_db_path, resolve_repo_path
+from common.btc5m_ops_status import collector_has_recent_error, latest_operational_audit_window
 from common.single_instance import _is_pid_alive
 
 load_dotenv(ROOT_DIR / "polymarket_scanner" / ".env")
@@ -52,6 +53,8 @@ MAX_SNAPSHOT_AGE_SEC = max(5, int(os.getenv("BTC5M_HEALTH_MAX_SNAPSHOT_AGE_SEC",
 MAX_REFERENCE_AGE_SEC = max(2, int(os.getenv("BTC5M_HEALTH_MAX_REFERENCE_AGE_SEC", "10")))
 MAX_AUDIT_AGE_SEC = max(60, int(os.getenv("BTC5M_HEALTH_MAX_AUDIT_AGE_SEC", "1800")))
 MAX_BACKUP_AGE_SEC = max(300, int(os.getenv("BTC5M_SUMMARY_MAX_BACKUP_AGE_SEC", "7200")))
+OPERATIONAL_AUDIT_WINDOW_MARKETS = max(3, int(os.getenv("BTC5M_OPERATIONAL_AUDIT_WINDOW_MARKETS", "12")))
+RECENT_COLLECTOR_ERROR_WINDOW_SEC = max(60, int(os.getenv("BTC5M_SUMMARY_RECENT_COLLECTOR_ERROR_WINDOW_SEC", "900")))
 
 COLLECTOR_CONFIG = {
     "scanner": {
@@ -154,7 +157,7 @@ def latest_scalar(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = 
 def latest_collector_run(conn: sqlite3.Connection, collector_name: str) -> dict[str, Any] | None:
     row = conn.execute(
         "SELECT run_id, status, started_ts, ended_ts, snapshot_count, market_count, "
-        "reference_tick_count, error_count "
+        "reference_tick_count, error_count, meta_json "
         "FROM collector_runs WHERE collector_name=? ORDER BY started_ts DESC LIMIT 1",
         (collector_name,),
     ).fetchone()
@@ -163,7 +166,7 @@ def latest_collector_run(conn: sqlite3.Connection, collector_name: str) -> dict[
 
 def latest_audit_summary(conn: sqlite3.Connection) -> dict[str, Any] | None:
     row = conn.execute(
-        "SELECT audit_ts, audit_status, notes, slot_coverage_ratio, max_gap_sec, invalid_book_ratio, "
+        "SELECT run_id, audit_ts, audit_status, notes, slot_coverage_ratio, max_gap_sec, invalid_book_ratio, "
         "semantic_reject_ratio, duplicate_snapshot_ratio, missing_reference_ratio, "
         "missing_resolution_flag, reference_sync_gap_sec "
         "FROM quality_audits WHERE market_id IS NULL ORDER BY audit_ts DESC, audit_id DESC LIMIT 1"
@@ -251,6 +254,7 @@ def build_summary() -> dict[str, Any]:
             "snapshot_file_age_sec": None,
         },
         "audit": None,
+        "operational_audit": None,
         "backup": latest_backup_info(now_ts),
         "health": read_health_status(now_ts),
         "warnings": [],
@@ -291,6 +295,10 @@ def build_summary() -> dict[str, Any]:
         summary["freshness"]["reference_age_sec"] = safe_age(now_ts, latest_reference_ts)
         summary["freshness"]["audit_age_sec"] = safe_age(now_ts, audit_summary["audit_ts"] if audit_summary else None)
         summary["audit"] = audit_summary
+        summary["operational_audit"] = latest_operational_audit_window(
+            conn,
+            window_markets=OPERATIONAL_AUDIT_WINDOW_MARKETS,
+        )
 
         for label, config in COLLECTOR_CONFIG.items():
             run_info = latest_collector_run(conn, config["collector_name"])
@@ -320,7 +328,11 @@ def build_summary() -> dict[str, Any]:
         if not collector["running"]:
             summary["warnings"].append(f"{label}_collector_not_running")
         run_info = collector.get("latest_run") or {}
-        if int(run_info.get("error_count") or 0) > 0:
+        if collector_has_recent_error(
+            run_info,
+            now_ts=now_ts,
+            recent_window_sec=RECENT_COLLECTOR_ERROR_WINDOW_SEC,
+        ):
             summary["warnings"].append(f"{label}_collector_errors:{int(run_info['error_count'])}")
 
     backup = summary["backup"]
@@ -337,7 +349,10 @@ def build_summary() -> dict[str, Any]:
     for warning in health["warnings"]:
         summary["warnings"].append(f"health_warning:{warning}")
 
-    if summary["audit"] and str(summary["audit"].get("audit_status") or "") == "FAIL":
+    operational_status = None
+    if summary["operational_audit"]:
+        operational_status = str(summary["operational_audit"].get("status") or "")
+    if summary["audit"] and str(summary["audit"].get("audit_status") or "") == "FAIL" and operational_status != "PASS":
         summary["warnings"].append("latest_audit_failed")
 
     if "latest_audit_failed" in summary["warnings"]:
@@ -355,6 +370,7 @@ def print_text_summary(summary: dict[str, Any]) -> None:
     freshness = summary["freshness"]
     backup = summary["backup"]
     health = summary["health"]
+    operational_audit = summary["operational_audit"] or {}
 
     print("BTC5M Collection Summary")
     print(f"Checked: {format_ts(summary['checked_ts'])}")
@@ -403,6 +419,17 @@ def print_text_summary(summary: dict[str, Any]) -> None:
         print(f"- notes={audit.get('notes') or '-'}")
     else:
         print("- no audit summary yet")
+
+    print("")
+    print("Operational Audit")
+    if operational_audit:
+        print(
+            f"- status={operational_audit.get('status')} window={operational_audit.get('window_count')}/"
+            f"{operational_audit.get('window_markets')} min_coverage={format_ratio(operational_audit.get('min_coverage_ratio'))} "
+            f"max_gap={format_ratio(operational_audit.get('max_gap_sec'))}"
+        )
+    else:
+        print("- no operational audit window yet")
 
     print("")
     print("Latest Backup")
