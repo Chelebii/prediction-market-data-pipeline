@@ -33,7 +33,7 @@ $tasks = @(
     },
     @{
         Name = '5minbots BTC5M Dataset Backup'
-        ScheduleArgs = @('/SC', 'HOURLY', '/MO', '1')
+        ScheduleArgs = @('/SC', 'HOURLY', '/MO', '6')
         Command = '"' + $wscriptExe + '" //B //Nologo "' + $backupHiddenRunner + '"'
     }
 )

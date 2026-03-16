@@ -1,6 +1,6 @@
 # BTC5M Live Data Collection Runbook
 
-Last updated: 2026-03-15
+Last updated: 2026-03-16
 
 ## Goal
 
@@ -44,7 +44,7 @@ Task Scheduler registration:
 - `5minbots BTC5M Dataset Audit`
   Runs every 15 minutes.
 - `5minbots BTC5M Dataset Backup`
-  Runs every hour.
+  Runs every 6 hours.
 
 Important:
 - Periodic tasks use wrapper `.cmd` files that first `cd` into the repo root.
@@ -79,9 +79,10 @@ Config source:
 
 ## Backup Policy
 
-Hourly SQLite backup:
+6-hour SQLite backup:
 - output dir: `runtime/backups`
-- keep count: `72`
+- keep count: `28`
+- effective retention: `~7 days`
 - filename format: `btc5m_dataset_YYYYMMDD_HHMMSSZ.db`
 - validation: backup-copy uzerinde `PRAGMA quick_check(1)`
 - latest pointer: `runtime/backups/btc5m_backup_latest.json`
