@@ -11,6 +11,10 @@ EXCLUDED_AUDIT_NOTE_PREFIXES = (
     "partial_startup_excluded",
 )
 
+UPTIME_STRONG_RATIO = 0.95
+UPTIME_GOOD_RATIO = 0.90
+UPTIME_CAUTION_RATIO = 0.80
+
 
 def parse_meta_json(raw_value: Any) -> dict[str, Any]:
     if raw_value in (None, ""):
@@ -82,8 +86,41 @@ def latest_operational_audit_window(
         "fail_count": len(fail_rows),
         "status": status,
         "min_coverage_ratio": min(coverage_values) if coverage_values else None,
+        "avg_coverage_ratio": (sum(coverage_values) / len(coverage_values)) if coverage_values else None,
         "max_gap_sec": max(gap_values) if gap_values else None,
         "fail_market_slugs": [str(row["market_slug"]) for row in fail_rows[:10]],
+    }
+
+
+def classify_uptime_ratio(ratio: Any) -> dict[str, Any]:
+    if ratio is None:
+        return {
+            "ratio": None,
+            "pct": None,
+            "band": "UNKNOWN",
+            "message": "no uptime data",
+        }
+
+    value = max(0.0, min(1.0, float(ratio)))
+    pct = value * 100.0
+    if value >= UPTIME_STRONG_RATIO:
+        band = "STRONG"
+        message = "strong research quality"
+    elif value >= UPTIME_GOOD_RATIO:
+        band = "GOOD"
+        message = "good for baseline research"
+    elif value >= UPTIME_CAUTION_RATIO:
+        band = "CAUTION"
+        message = "use carefully"
+    else:
+        band = "RISKY"
+        message = "strategy/model conclusions risky"
+
+    return {
+        "ratio": value,
+        "pct": pct,
+        "band": band,
+        "message": message,
     }
 
 

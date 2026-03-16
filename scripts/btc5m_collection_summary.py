@@ -18,7 +18,11 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from common.btc5m_dataset_db import resolve_db_path, resolve_repo_path
-from common.btc5m_ops_status import collector_has_recent_error, latest_operational_audit_window
+from common.btc5m_ops_status import (
+    classify_uptime_ratio,
+    collector_has_recent_error,
+    latest_operational_audit_window,
+)
 from common.single_instance import _is_pid_alive
 
 load_dotenv(ROOT_DIR / "polymarket_scanner" / ".env")
@@ -147,6 +151,12 @@ def format_ratio(value: Any) -> str:
     return f"{float(value):.3f}"
 
 
+def format_pct(value: Any) -> str:
+    if value is None:
+        return "-"
+    return f"{float(value):.1f}%"
+
+
 def latest_scalar(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> Any:
     row = conn.execute(sql, params).fetchone()
     if not row:
@@ -255,6 +265,7 @@ def build_summary() -> dict[str, Any]:
         },
         "audit": None,
         "operational_audit": None,
+        "uptime": None,
         "backup": latest_backup_info(now_ts),
         "health": read_health_status(now_ts),
         "warnings": [],
@@ -305,6 +316,17 @@ def build_summary() -> dict[str, Any]:
             summary["collectors"][label]["latest_run"] = run_info
     finally:
         conn.close()
+
+    aggregate_uptime = classify_uptime_ratio(
+        (summary["audit"] or {}).get("slot_coverage_ratio")
+    )
+    recent_uptime = classify_uptime_ratio(
+        (summary["operational_audit"] or {}).get("min_coverage_ratio")
+    )
+    summary["uptime"] = {
+        "aggregate": aggregate_uptime,
+        "recent": recent_uptime,
+    }
 
     freshness = summary["freshness"]
     if summary["freshness"]["snapshot_age_sec"] is None:
@@ -371,6 +393,9 @@ def print_text_summary(summary: dict[str, Any]) -> None:
     backup = summary["backup"]
     health = summary["health"]
     operational_audit = summary["operational_audit"] or {}
+    uptime = summary["uptime"] or {}
+    aggregate_uptime = uptime.get("aggregate") or {}
+    recent_uptime = uptime.get("recent") or {}
 
     print("BTC5M Collection Summary")
     print(f"Checked: {format_ts(summary['checked_ts'])}")
@@ -426,10 +451,22 @@ def print_text_summary(summary: dict[str, Any]) -> None:
         print(
             f"- status={operational_audit.get('status')} window={operational_audit.get('window_count')}/"
             f"{operational_audit.get('window_markets')} min_coverage={format_ratio(operational_audit.get('min_coverage_ratio'))} "
+            f"avg_coverage={format_ratio(operational_audit.get('avg_coverage_ratio'))} "
             f"max_gap={format_ratio(operational_audit.get('max_gap_sec'))}"
         )
     else:
         print("- no operational audit window yet")
+
+    print("")
+    print("Uptime")
+    print(
+        f"- recent={format_pct(recent_uptime.get('pct'))} band={recent_uptime.get('band') or '-'} "
+        f"note={recent_uptime.get('message') or '-'}"
+    )
+    print(
+        f"- aggregate={format_pct(aggregate_uptime.get('pct'))} band={aggregate_uptime.get('band') or '-'} "
+        f"note={aggregate_uptime.get('message') or '-'}"
+    )
 
     print("")
     print("Latest Backup")

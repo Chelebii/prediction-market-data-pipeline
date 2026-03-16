@@ -44,11 +44,15 @@ function Get-WindowTitle {
     $snapshotAge = if ($null -ne $Summary.freshness.snapshot_age_sec) { [int]$Summary.freshness.snapshot_age_sec } else { -1 }
     $referenceAge = if ($null -ne $Summary.freshness.reference_age_sec) { [int]$Summary.freshness.reference_age_sec } else { -1 }
     $auditAge = if ($null -ne $Summary.freshness.audit_age_sec) { [int]$Summary.freshness.audit_age_sec } else { -1 }
+    $recentPct = if ($null -ne $Summary.uptime.recent.pct) { ('{0:N1}' -f [double]$Summary.uptime.recent.pct) } else { '-' }
+    $recentBand = if ($Summary.uptime.recent.band) { [string]$Summary.uptime.recent.band } else { 'UNKNOWN' }
+    $aggregatePct = if ($null -ne $Summary.uptime.aggregate.pct) { ('{0:N1}' -f [double]$Summary.uptime.aggregate.pct) } else { '-' }
+    $aggregateBand = if ($Summary.uptime.aggregate.band) { [string]$Summary.uptime.aggregate.band } else { 'UNKNOWN' }
 
     if ($warnings.Count -gt 0) {
-        return "BTC5M Monitor | WARN | snap=${snapshotAge}s ref=${referenceAge}s audit=${auditAge}s | warnings=$($warnings.Count)"
+        return "BTC5M Monitor | WARN | recent=${recentPct}%/${recentBand} agg=${aggregatePct}%/${aggregateBand} | snap=${snapshotAge}s ref=${referenceAge}s audit=${auditAge}s | warnings=$($warnings.Count)"
     }
-    return "BTC5M Monitor | OK | snap=${snapshotAge}s ref=${referenceAge}s audit=${auditAge}s"
+    return "BTC5M Monitor | OK | recent=${recentPct}%/${recentBand} agg=${aggregatePct}%/${aggregateBand} | snap=${snapshotAge}s ref=${referenceAge}s audit=${auditAge}s"
 }
 
 function Get-StateSignature {
@@ -60,6 +64,8 @@ function Get-StateSignature {
         reference_running = [bool]$Summary.collectors.reference.running
         resolution_running = [bool]$Summary.collectors.resolution.running
         audit_status = [string]($Summary.audit.audit_status)
+        recent_uptime_band = [string]($Summary.uptime.recent.band)
+        aggregate_uptime_band = [string]($Summary.uptime.aggregate.band)
     }
     return ($payload | ConvertTo-Json -Compress -Depth 6)
 }
@@ -68,10 +74,14 @@ function Get-StateMessage {
     param($Summary)
 
     $warnings = @($Summary.warnings)
+    $recentPct = if ($null -ne $Summary.uptime.recent.pct) { '{0:N1}' -f [double]$Summary.uptime.recent.pct } else { '-' }
+    $recentBand = if ($Summary.uptime.recent.band) { [string]$Summary.uptime.recent.band } else { 'UNKNOWN' }
+    $aggregatePct = if ($null -ne $Summary.uptime.aggregate.pct) { '{0:N1}' -f [double]$Summary.uptime.aggregate.pct } else { '-' }
+    $aggregateBand = if ($Summary.uptime.aggregate.band) { [string]$Summary.uptime.aggregate.band } else { 'UNKNOWN' }
     if ($warnings.Count -eq 0) {
-        return "healthy | snapshot_age=$($Summary.freshness.snapshot_age_sec)s | reference_age=$($Summary.freshness.reference_age_sec)s | audit_age=$($Summary.freshness.audit_age_sec)s"
+        return "healthy | recent_uptime=${recentPct}%/${recentBand} | aggregate_uptime=${aggregatePct}%/${aggregateBand} | snapshot_age=$($Summary.freshness.snapshot_age_sec)s | reference_age=$($Summary.freshness.reference_age_sec)s | audit_age=$($Summary.freshness.audit_age_sec)s"
     }
-    return "warnings=" + ($warnings -join ', ')
+    return "warnings=" + ($warnings -join ', ') + " | recent_uptime=${recentPct}%/${recentBand} | aggregate_uptime=${aggregatePct}%/${aggregateBand}"
 }
 
 if (-not $NoStart) {
