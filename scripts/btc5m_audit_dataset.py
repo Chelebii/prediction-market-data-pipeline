@@ -44,6 +44,8 @@ REFERENCE_TOLERANCE_SEC = max(0, int(os.getenv("BTC5M_AUDIT_REFERENCE_TOLERANCE_
 LOOKBACK_HOURS = max(1, int(os.getenv("BTC5M_AUDIT_LOOKBACK_HOURS", "48")))
 PARTIAL_STARTUP_GRACE_SEC = max(5, int(os.getenv("BTC5M_AUDIT_PARTIAL_STARTUP_GRACE_SEC", "15")))
 SETTLEMENT_GRACE_SEC = max(60, int(os.getenv("BTC5M_AUDIT_SETTLEMENT_GRACE_SEC", "900")))
+SNAPSHOT_OUTAGE_GAP_SEC = max(15, int(os.getenv("BTC5M_AUDIT_SNAPSHOT_OUTAGE_GAP_SEC", "15")))
+REFERENCE_OUTAGE_GAP_SEC = max(5, int(os.getenv("BTC5M_AUDIT_REFERENCE_OUTAGE_GAP_SEC", "5")))
 LOG_PATH = resolve_repo_path(
     os.getenv("BTC5M_AUDIT_LOG_PATH"),
     default_path=ROOT_DIR / "runtime" / "logs" / "btc5m_audit_dataset.log",
@@ -99,6 +101,8 @@ def collector_config_hash(args: argparse.Namespace) -> str:
         "reference_tolerance_sec": REFERENCE_TOLERANCE_SEC,
         "partial_startup_grace_sec": PARTIAL_STARTUP_GRACE_SEC,
         "settlement_grace_sec": SETTLEMENT_GRACE_SEC,
+        "snapshot_outage_gap_sec": SNAPSHOT_OUTAGE_GAP_SEC,
+        "reference_outage_gap_sec": REFERENCE_OUTAGE_GAP_SEC,
     }
     encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -172,6 +176,16 @@ def max_gap_sec(slot_start_ts: int, slot_end_ts: int, collected_ts: list[int]) -
     points = [int(slot_start_ts)] + sorted(set(int(ts) for ts in collected_ts if slot_start_ts <= int(ts) <= slot_end_ts)) + [int(slot_end_ts)]
     gaps = [max(0, right - left) for left, right in zip(points, points[1:])]
     return float(max(gaps) if gaps else 0.0)
+
+
+def internal_max_gap_sec(points: list[int]) -> Optional[float]:
+    unique_points = sorted(set(int(ts) for ts in points))
+    if len(unique_points) < 2:
+        return None
+    gaps = [max(0, right - left) for left, right in zip(unique_points, unique_points[1:])]
+    if not gaps:
+        return None
+    return float(max(gaps))
 
 
 def reference_gap_seconds(snapshot_ts: int, reference_ts: list[int]) -> Optional[float]:
@@ -290,6 +304,12 @@ def compute_market_audit(conn: sqlite3.Connection, market_row: sqlite3.Row, now_
     )
     duplicate_ratio = duplicate_snapshot_ratio(collected_ts)
     max_gap = max_gap_sec(slot_start_ts, slot_end_ts, collected_ts)
+    snapshot_internal_gap_sec = internal_max_gap_sec(collected_ts)
+    reference_internal_gap_sec = internal_max_gap_sec(refs)
+    outage_like_gap_flag = bool(
+        (snapshot_internal_gap_sec is not None and snapshot_internal_gap_sec > SNAPSHOT_OUTAGE_GAP_SEC)
+        or (reference_internal_gap_sec is not None and reference_internal_gap_sec > REFERENCE_OUTAGE_GAP_SEC)
+    )
 
     matched_gaps: list[float] = []
     missing_reference_count = 0
@@ -339,6 +359,7 @@ def compute_market_audit(conn: sqlite3.Connection, market_row: sqlite3.Row, now_
         reference_sync_gap_sec=reference_sync_gap_sec,
         missing_resolution_flag=missing_resolution_flag,
         actual_count=actual_count,
+        outage_like_gap_flag=outage_like_gap_flag,
     )
     if not bool(scope_info["summary_included"]):
         status = "INFO"
@@ -347,6 +368,13 @@ def compute_market_audit(conn: sqlite3.Connection, market_row: sqlite3.Row, now_
         notes = scope_info["scope_note"]
     else:
         notes = f"{scope_info['scope_note']},{notes}"
+
+    notes = (
+        f"{notes},snapshot_internal_gap_sec={format_metric(snapshot_internal_gap_sec)},"
+        f"reference_internal_gap_sec={format_metric(reference_internal_gap_sec)}"
+    )
+    if outage_like_gap_flag:
+        notes = f"{notes},outage_like_gap_detected"
 
     return {
         "market_id": market["market_id"],
@@ -370,6 +398,9 @@ def compute_market_audit(conn: sqlite3.Connection, market_row: sqlite3.Row, now_
         "audit_scope": str(scope_info["scope"]),
         "late_start_sec": scope_info["late_start_sec"],
         "grace_remaining_sec": scope_info["grace_remaining_sec"],
+        "snapshot_internal_gap_sec": snapshot_internal_gap_sec,
+        "reference_internal_gap_sec": reference_internal_gap_sec,
+        "outage_like_gap_flag": outage_like_gap_flag,
     }
 
 
@@ -382,6 +413,7 @@ def evaluate_audit_status(
     reference_sync_gap_sec: Optional[float],
     missing_resolution_flag: int,
     actual_count: int,
+    outage_like_gap_flag: bool,
 ) -> tuple[str, str]:
     failures: list[str] = []
     if actual_count <= 0:
@@ -398,6 +430,8 @@ def evaluate_audit_status(
         failures.append("reference_sync_gap_above_threshold")
     if missing_resolution_flag:
         failures.append("missing_official_resolution")
+    if outage_like_gap_flag:
+        failures.append("outage_like_gap_detected")
     if not failures:
         return "PASS", "all_thresholds_met"
     return "FAIL", ",".join(failures)
@@ -457,6 +491,7 @@ def audit_summary_row(
         reference_sync_gap_sec=reference_sync_gap_sec,
         missing_resolution_flag=missing_resolution_flag,
         actual_count=total_actual,
+        outage_like_gap_flag=bool(any(item.get("outage_like_gap_flag") for item in included_results)),
     )
     if not included_results:
         status = "INFO"
@@ -533,6 +568,8 @@ def main() -> None:
             "reference_tolerance_sec": REFERENCE_TOLERANCE_SEC,
             "partial_startup_grace_sec": PARTIAL_STARTUP_GRACE_SEC,
             "settlement_grace_sec": SETTLEMENT_GRACE_SEC,
+            "snapshot_outage_gap_sec": SNAPSHOT_OUTAGE_GAP_SEC,
+            "reference_outage_gap_sec": REFERENCE_OUTAGE_GAP_SEC,
             "log_path": str(LOG_PATH),
             "db_path": str(resolve_db_path()),
         },
@@ -641,6 +678,8 @@ def main() -> None:
                 "reference_tolerance_sec": REFERENCE_TOLERANCE_SEC,
                 "partial_startup_grace_sec": PARTIAL_STARTUP_GRACE_SEC,
                 "settlement_grace_sec": SETTLEMENT_GRACE_SEC,
+                "snapshot_outage_gap_sec": SNAPSHOT_OUTAGE_GAP_SEC,
+                "reference_outage_gap_sec": REFERENCE_OUTAGE_GAP_SEC,
                 "market_count": len(results),
                 "error_count": error_count,
                 "log_path": str(LOG_PATH),

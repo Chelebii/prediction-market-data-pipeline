@@ -195,6 +195,17 @@ def load_reference_rows(conn: sqlite3.Connection, start_ts: int, end_ts: int) ->
     return list(conn.execute(sql, (start_ts, end_ts)).fetchall())
 
 
+def load_latest_market_audit(conn: sqlite3.Connection, market_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT audit_status, max_gap_sec, notes "
+        "FROM quality_audits "
+        "WHERE market_id=? "
+        "ORDER BY audit_ts DESC, audit_id DESC LIMIT 1",
+        (market_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def reference_price_at_or_before(reference_rows: list[sqlite3.Row], reference_ts: list[int], target_ts: int) -> Optional[float]:
     idx = bisect_right(reference_ts, int(target_ts)) - 1
     if idx < 0:
@@ -226,7 +237,17 @@ def insert_dataset_rows(conn: sqlite3.Connection, rows: list[dict[str, Any]]) ->
     return len(rows)
 
 
-def trainability_reason(row: dict[str, Any], btc_price: Optional[float]) -> Optional[str]:
+def trainability_reason(
+    row: dict[str, Any],
+    btc_price: Optional[float],
+    latest_audit: Optional[dict[str, Any]],
+) -> Optional[str]:
+    audit_status = str((latest_audit or {}).get("audit_status") or "")
+    audit_notes = str((latest_audit or {}).get("notes") or "")
+    if "outage_like_gap_detected" in audit_notes:
+        return "OUTAGE_LIKE_GAP"
+    if audit_status and audit_status != "PASS":
+        return "AUDIT_NOT_PASS"
     if str(row.get("market_resolution_status") or "") != "RESOLVED":
         return "MARKET_NOT_RESOLVED"
     if str(row.get("label_quality_flag") or "") != "OFFICIAL_RESOLVED":
@@ -282,11 +303,12 @@ def build_dataset_rows_for_market(
     last_ts = int(rows[-1]["decision_ts"])
     reference_rows = load_reference_rows(conn, first_ts - MAX_REFERENCE_LAG_SEC, last_ts)
     reference_ts = [int(row["ts_utc"]) for row in reference_rows]
+    latest_audit = load_latest_market_audit(conn, str(market_row["market_id"]))
 
     dataset_rows: list[dict[str, Any]] = []
     for row in rows:
         btc_price = reference_price_at_or_before(reference_rows, reference_ts, int(row["decision_ts"]))
-        reason = trainability_reason(row, btc_price)
+        reason = trainability_reason(row, btc_price, latest_audit)
         dataset_rows.append(
             {
                 "market_id": row["market_id"],
