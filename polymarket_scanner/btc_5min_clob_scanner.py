@@ -58,6 +58,7 @@ MAX_BOOK_AGE_SEC = int(os.getenv("BTC_5MIN_MAX_BOOK_AGE_SEC", "20"))
 NO_DATA_ALERT_AFTER_SEC = int(os.getenv("BTC_5MIN_NO_DATA_ALERT_AFTER_SEC", "45"))
 NO_DATA_ALERT_COOLDOWN_SEC = int(os.getenv("BTC_5MIN_NO_DATA_ALERT_COOLDOWN_SEC", "180"))
 NO_DATA_NEW_SLOT_GRACE_SEC = int(os.getenv("BTC_5MIN_NO_DATA_NEW_SLOT_GRACE_SEC", "20"))
+NO_DATA_RAW_IDLE_ALERT_SEC = int(os.getenv("BTC_5MIN_NO_DATA_RAW_IDLE_ALERT_SEC", "90"))
 MAX_SPREAD = float(os.getenv("BTC_5MIN_MAX_SPREAD", "0.25"))
 MAX_PRICE_MID_GAP = float(os.getenv("BTC_5MIN_MAX_PRICE_MID_GAP", "0.015"))
 MAX_SIDE_MID_DEVIATION = float(os.getenv("BTC_5MIN_MAX_SIDE_MID_DEVIATION", "0.01"))
@@ -98,6 +99,9 @@ _dataset_error_count = 0
 _dataset_market_ids: set[str] = set()
 _dataset_discovered_markets: set[str] = set()
 DEPTH_WINDOWS = (("within_1c", 0.01), ("within_2c", 0.02), ("within_5c", 0.05))
+_last_raw_activity_ts = 0.0
+_last_raw_activity_state = "STARTUP"
+_last_raw_activity_reason = "startup"
 
 
 def log(msg: str):
@@ -128,6 +132,13 @@ def snapshot_slot_ts() -> Optional[int]:
         return int(slot_ts) if slot_ts is not None else None
     except Exception:
         return None
+
+
+def record_raw_activity(state: str, reason: str = "") -> None:
+    global _last_raw_activity_ts, _last_raw_activity_state, _last_raw_activity_reason
+    _last_raw_activity_ts = time.time()
+    _last_raw_activity_state = str(state or "UNKNOWN")
+    _last_raw_activity_reason = str(reason or state or "unknown")
 
 
 def http_get(url: str, params: dict = None, timeout: int = 5) -> Optional[requests.Response]:
@@ -549,6 +560,9 @@ def scanner_config_hash() -> str:
         "min_liquidity": MIN_LIQUIDITY,
         "next_slot_publish_after_sec": NEXT_SLOT_PUBLISH_AFTER_SEC,
         "min_stable_passes": MIN_STABLE_PASSES,
+        "no_data_alert_after_sec": NO_DATA_ALERT_AFTER_SEC,
+        "no_data_raw_idle_alert_sec": NO_DATA_RAW_IDLE_ALERT_SEC,
+        "no_data_alert_cooldown_sec": NO_DATA_ALERT_COOLDOWN_SEC,
         "snapshot_path": SNAPSHOT_PATH,
         "dataset_db_path": str(resolve_db_path()),
     }
@@ -1072,6 +1086,7 @@ def scan_once() -> bool:
         yes_token_id, no_token_id = parse_clob_ids(market)
         if not yes_token_id or not no_token_id:
             reject_reason = "token_missing"
+            record_raw_activity("REJECTED", reject_reason)
             reject_payload = build_snapshot(market, None, None, status)
             reject_state_fields = derive_market_state_fields(market, reject_payload)
             write_candidate_observation_to_db(
@@ -1096,6 +1111,7 @@ def scan_once() -> bool:
         no_data, no_reason, no_meta = build_side_snapshot(no_token_id)
         if not yes_data or not no_data:
             reject_reason = "side_snapshot_invalid"
+            record_raw_activity("REJECTED", reject_reason)
             reject_payload = build_snapshot(market, yes_data, no_data, status)
             reject_state_fields = derive_market_state_fields(
                 market,
@@ -1137,6 +1153,7 @@ def scan_once() -> bool:
         cross_ok, cross_reason = validate_cross_market(market, yes_data, no_data)
         if not cross_ok:
             reject_reason = "cross_validation_failed"
+            record_raw_activity("REJECTED", reject_reason)
             reject_payload = build_snapshot(market, yes_data, no_data, status)
             reject_state_fields = derive_market_state_fields(
                 market,
@@ -1189,6 +1206,7 @@ def scan_once() -> bool:
         # Tek sefer temiz quote gormek yetmez.
         # Ayni aday market birkac taramada ust uste temiz gelirse publish edilir.
         if _last_candidate_passes < max(1, MIN_STABLE_PASSES):
+            record_raw_activity("WARMUP", f"stable_pass={_last_candidate_passes}/{max(1, MIN_STABLE_PASSES)}")
             write_candidate_observation_to_db(
                 market,
                 payload,
@@ -1227,6 +1245,7 @@ def scan_once() -> bool:
         age = int(time.time()) - payload["ts"]
         if age > MAX_BOOK_AGE_SEC:
             reject_reason = "stale_data"
+            record_raw_activity("REJECTED", reject_reason)
             stale_state_fields = derive_market_state_fields(
                 market,
                 payload,
@@ -1259,6 +1278,7 @@ def scan_once() -> bool:
             log(f"SKIP stale_data | age={age}s | slug={payload['market_slug']}")
             return False
 
+        record_raw_activity("PUBLISHED", str(payload.get("market_slug") or "published"))
         write_candidate_observation_to_db(
             market,
             payload,
@@ -1300,6 +1320,7 @@ def scan_once() -> bool:
 def main():
     # main() scanner'i tek instance olarak ayakta tutar.
     # Uzun sure fresh snapshot uretilemezse uyarir, runtime error olursa loglar.
+    global _last_raw_activity_ts, _last_raw_activity_state, _last_raw_activity_reason
     acquire_single_instance_lock(LOCK_FILE, process_name="btc-5min-clob-scanner", on_log=log, takeover=True)
     init_dataset_writer()
     log("BTC 5MIN CLOB-only scanner started")
@@ -1308,6 +1329,9 @@ def main():
     snapshot_age = snapshot_age_seconds()
     if snapshot_age is not None and snapshot_age <= MAX_BOOK_AGE_SEC:
         last_ok_ts = max(last_ok_ts - snapshot_age, 0.0)
+    _last_raw_activity_ts = last_ok_ts
+    _last_raw_activity_state = "STARTUP"
+    _last_raw_activity_reason = "startup"
     last_no_data_alert_ts = 0.0
     exit_status = "STOPPED"
     try:
@@ -1322,6 +1346,7 @@ def main():
                 else:
                     error_count += 1
                     gap = now - last_ok_ts
+                    raw_activity_gap = now - _last_raw_activity_ts if _last_raw_activity_ts > 0 else gap
                     current_slot = (int(now) // 300) * 300
                     sec_in_slot = int(now) - current_slot
                     published_slot = snapshot_slot_ts()
@@ -1332,12 +1357,14 @@ def main():
                     )
                     if (
                         gap >= NO_DATA_ALERT_AFTER_SEC
+                        and raw_activity_gap >= NO_DATA_RAW_IDLE_ALERT_SEC
                         and not in_new_slot_grace
                         and (now - last_no_data_alert_ts) >= NO_DATA_ALERT_COOLDOWN_SEC
                     ):
                         telegram_alert(
-                            f"BTC 5MIN CLOB scanner {int(gap)}s boyunca fresh snapshot publish edemedi. "
-                            f"Recent state skip/warmup olabilir; validation/discovery kontrol et.",
+                            f"BTC 5MIN CLOB scanner {int(gap)}s boyunca fresh snapshot publish edemedi "
+                            f"ve {int(raw_activity_gap)}s boyunca yeni raw activity gormedi. "
+                            f"last_state={_last_raw_activity_state} reason={_last_raw_activity_reason}",
                             level="WARN",
                         )
                         last_no_data_alert_ts = now
