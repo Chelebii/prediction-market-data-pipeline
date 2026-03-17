@@ -23,17 +23,17 @@ $wscriptExe = Join-Path $env:SystemRoot 'System32\wscript.exe'
 $tasks = @(
     @{
         Name = '5minbots BTC5M Health Check'
-        ScheduleArgs = @('/SC', 'MINUTE', '/MO', '5')
+        ScheduleArgs = @('/SC', 'MINUTE', '/MO', '5', '/ST', '00:03')
         Command = '"' + $wscriptExe + '" //B //Nologo "' + $healthHiddenRunner + '"'
     },
     @{
         Name = '5minbots BTC5M Dataset Audit'
-        ScheduleArgs = @('/SC', 'MINUTE', '/MO', '15')
+        ScheduleArgs = @('/SC', 'MINUTE', '/MO', '15', '/ST', '00:01')
         Command = '"' + $wscriptExe + '" //B //Nologo "' + $auditHiddenRunner + '"'
     },
     @{
         Name = '5minbots BTC5M Dataset Backup'
-        ScheduleArgs = @('/SC', 'HOURLY', '/MO', '6')
+        ScheduleArgs = @('/SC', 'HOURLY', '/MO', '6', '/ST', '00:10')
         Command = '"' + $wscriptExe + '" //B //Nologo "' + $backupHiddenRunner + '"'
     }
 )
