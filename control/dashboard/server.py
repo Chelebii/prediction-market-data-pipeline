@@ -12,6 +12,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 CONTROL_DIR = ROOT / "control"
 BOTS_CONTROL = CONTROL_DIR / "scripts" / "bots_control.ps1"
 STATE_REGISTRY = ROOT / "state" / "active_runs.json"
@@ -19,6 +21,7 @@ SNAPSHOT_SHARED = ROOT / "runtime" / "snapshots" / "polymarket_shared_snapshot.j
 SNAPSHOT_BTC5 = ROOT / "runtime" / "snapshots" / "btc_5min_clob_snapshot.json"
 SCANNER_LOG = ROOT / "polymarket_scanner" / "shared_scanner.log"
 BTC5_SCANNER_LOG = ROOT / "polymarket_scanner" / "btc_5min_clob_scanner.log"
+BTC5_SCANNER_LOCK = ROOT / "polymarket_scanner" / "btc_5min_clob_scanner.lock"
 BOT5_DIR = ROOT / "polymarket_paper_bot_5min"
 HOST = os.getenv("X_DASHBOARD_HOST", "127.0.0.1")
 PORT = int(os.getenv("X_DASHBOARD_PORT", "8765"))
@@ -27,6 +30,20 @@ try:
     import psutil
 except Exception:
     psutil = None
+
+try:
+    from common.single_instance import is_lock_process_alive, read_lock_metadata
+except Exception:
+    is_lock_process_alive = None
+    read_lock_metadata = None
+
+BTC5_COLLECTOR_IMAGE_NAMES = {
+    "btc5m-scanner.exe",
+    "btc5m-reference.exe",
+    "btc5m-resolution.exe",
+    "python.exe",
+    "pythonw.exe",
+}
 
 # Telegram notification config (from scanner .env or environment)
 def _load_telegram_config():
@@ -579,8 +596,8 @@ def parse_iso_age(ts: str):
         return None
 
 
-def is_process_alive(pattern: str) -> bool:
-    """Check if a python process matching the pattern is running without spawning shell windows."""
+def is_process_alive(pattern: str, allowed_image_names: set[str] | None = None) -> bool:
+    """Check if a matching process is running without spawning shell windows."""
     if not psutil:
         return False
     try:
@@ -590,7 +607,10 @@ def is_process_alive(pattern: str) -> bool:
         for proc in psutil.process_iter(["name", "cmdline"]):
             try:
                 name = (proc.info.get("name") or "").lower()
-                if "python" not in name:
+                if allowed_image_names is not None:
+                    if name not in allowed_image_names:
+                        continue
+                elif "python" not in name:
                     continue
                 cmdline = proc.info.get("cmdline") or []
                 cmd = " ".join(str(part) for part in cmdline if part)
@@ -643,7 +663,24 @@ def get_registry_state():
     scanner_age = file_age(BTC5_SCANNER_LOG)
     if scanner_age is None:
         scanner_age = file_age(SCANNER_LOG)
-    btc5_alive = is_process_alive(r"btc_5min_clob_scanner\\.py")
+    btc5_lock_meta = None
+    btc5_alive = False
+    if is_lock_process_alive is not None:
+        try:
+            btc5_alive, _, btc5_lock_meta = is_lock_process_alive(str(BTC5_SCANNER_LOCK))
+        except Exception:
+            btc5_alive = False
+            btc5_lock_meta = None
+    if not btc5_lock_meta and read_lock_metadata is not None:
+        try:
+            btc5_lock_meta = read_lock_metadata(str(BTC5_SCANNER_LOCK))
+        except Exception:
+            btc5_lock_meta = None
+    if not btc5_alive:
+        btc5_alive = is_process_alive(
+            r"btc_5min_clob_scanner\\.py",
+            allowed_image_names=BTC5_COLLECTOR_IMAGE_NAMES,
+        )
     if btc5_alive:
         scanner_status = "ACTIVE"
     else:
@@ -653,6 +690,8 @@ def get_registry_state():
         "active_run_id": None,
         "trading_mode": "n/a",
         "heartbeat_age_sec": scanner_age,
+        "process_image_name": (btc5_lock_meta or {}).get("image_name"),
+        "process_exe_path": (btc5_lock_meta or {}).get("exe_path"),
     }
     return bots
 

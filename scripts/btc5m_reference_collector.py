@@ -39,6 +39,8 @@ from common.btc5m_reference_feed import (
     fetch_binance_spot_reference_tick,
     normalize_symbol,
 )
+from common.bot_notify import send_alert
+from common.network_diagnostics import build_network_alert_message, is_network_reason
 from common.single_instance import acquire_single_instance_lock
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -54,6 +56,7 @@ SOURCE_NAME = str(os.getenv("BTC5M_REFERENCE_SOURCE_NAME", DEFAULT_SOURCE_NAME))
 BASE_URL = str(os.getenv("BTC5M_REFERENCE_BASE_URL", BINANCE_SPOT_BASE_URL)).strip() or BINANCE_SPOT_BASE_URL
 LOG_PATH = Path(os.getenv("BTC5M_REFERENCE_LOG_PATH", ROOT_DIR / "runtime" / "logs" / "btc5m_reference_collector.log"))
 LOCK_PATH = Path(os.getenv("BTC5M_REFERENCE_LOCK_PATH", ROOT_DIR / "runtime" / "locks" / "btc5m_reference_collector.lock"))
+ALERT_DEDUPE_SEC = max(120, int(os.getenv("BTC5M_REFERENCE_ALERT_DEDUPE_SEC", "600")))
 
 _logger = logging.getLogger("btc5m_reference_collector")
 _logger.setLevel(logging.INFO)
@@ -180,6 +183,17 @@ def main() -> None:
                 error_count += 1
                 update_run_metrics(conn, run_id, reference_tick_count=tick_count, error_count=error_count)
                 log(f"WARN reference_fetch_failed | reason={exc}")
+                if is_network_reason(exc):
+                    send_alert(
+                        bot_label="BTC5M-REF",
+                        msg=build_network_alert_message(
+                            "Reference collector",
+                            str(exc),
+                            extra=f"source={SOURCE_NAME} symbol={SYMBOL}",
+                        ),
+                        level="WARN",
+                        dedupe_seconds=ALERT_DEDUPE_SEC,
+                    )
                 if args.once:
                     raise SystemExit(1)
             except Exception as exc:

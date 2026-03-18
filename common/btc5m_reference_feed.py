@@ -8,6 +8,8 @@ from typing import Any, Mapping, Optional
 
 import requests
 
+from common.network_diagnostics import classify_requests_exception
+
 BINANCE_SPOT_BASE_URL = "https://api.binance.com"
 BINANCE_PRICE_ENDPOINT = "/api/v3/ticker/price"
 BINANCE_BOOK_ENDPOINT = "/api/v3/ticker/bookTicker"
@@ -54,21 +56,27 @@ def fetch_binance_spot_reference_tick(
     symbol = normalize_symbol(symbol)
 
     price_started_at = time.perf_counter()
-    price_response = session.get(
-        f"{base_url}{BINANCE_PRICE_ENDPOINT}",
-        params={"symbol": symbol},
-        timeout=timeout_sec,
-    )
+    try:
+        price_response = session.get(
+            f"{base_url}{BINANCE_PRICE_ENDPOINT}",
+            params={"symbol": symbol},
+            timeout=timeout_sec,
+        )
+    except requests.RequestException as exc:
+        raise ReferenceFeedError(classify_requests_exception(exc)) from exc
     price_latency_ms = _elapsed_ms(price_started_at)
     if price_response.status_code != 200:
         raise ReferenceFeedError(f"price_http_{price_response.status_code}")
 
     book_started_at = time.perf_counter()
-    book_response = session.get(
-        f"{base_url}{BINANCE_BOOK_ENDPOINT}",
-        params={"symbol": symbol},
-        timeout=timeout_sec,
-    )
+    try:
+        book_response = session.get(
+            f"{base_url}{BINANCE_BOOK_ENDPOINT}",
+            params={"symbol": symbol},
+            timeout=timeout_sec,
+        )
+    except requests.RequestException as exc:
+        raise ReferenceFeedError(classify_requests_exception(exc)) from exc
     book_latency_ms = _elapsed_ms(book_started_at)
     if book_response.status_code != 200:
         raise ReferenceFeedError(f"book_http_{book_response.status_code}")

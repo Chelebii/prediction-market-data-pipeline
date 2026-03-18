@@ -21,7 +21,7 @@ if str(ROOT_DIR) not in sys.path:
 from common.btc5m_dataset_db import resolve_db_path, resolve_repo_path
 from common.btc5m_ops_status import latest_operational_audit_window
 from common.bot_notify import send_alert
-from common.single_instance import _is_pid_alive
+from common.single_instance import is_lock_process_alive, read_lock_metadata
 
 load_dotenv(ROOT_DIR / "polymarket_scanner" / ".env")
 load_dotenv()
@@ -74,27 +74,19 @@ def log(message: str) -> None:
     LOGGER.info(message)
 
 
-def read_lock_pid(lock_path: Path) -> int | None:
-    if not lock_path.exists():
-        return None
-    try:
-        raw = lock_path.read_text(encoding="utf-8").strip()
-        if not raw:
-            return None
-        if raw.isdigit():
-            return int(raw)
-        payload = json.loads(raw)
-        pid = payload.get("pid")
-        return int(pid) if pid else None
-    except Exception:
-        return None
+def process_running(lock_path: Path) -> tuple[bool, int | None, dict | None]:
+    return is_lock_process_alive(str(lock_path))
 
 
-def process_running(lock_path: Path) -> tuple[bool, int | None]:
-    pid = read_lock_pid(lock_path)
-    if not pid:
-        return False, None
-    return bool(_is_pid_alive(int(pid))), int(pid)
+def collector_process_meta(lock_meta: Any) -> tuple[str | None, str | None]:
+    if not isinstance(lock_meta, dict):
+        return None, None
+    image_name = lock_meta.get("image_name")
+    exe_path = lock_meta.get("exe_path")
+    return (
+        str(image_name) if image_name else None,
+        str(exe_path) if exe_path else None,
+    )
 
 
 def latest_scalar(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> Any:
@@ -135,9 +127,18 @@ def build_status() -> tuple[dict[str, Any], list[str]]:
     db_path = resolve_db_path()
     issues: list[str] = []
 
-    scanner_running, scanner_pid = process_running(SCANNER_LOCK)
-    reference_running, reference_pid = process_running(REFERENCE_LOCK)
-    resolution_running, resolution_pid = process_running(RESOLUTION_LOCK)
+    scanner_running, scanner_pid, scanner_lock_meta = process_running(SCANNER_LOCK)
+    reference_running, reference_pid, reference_lock_meta = process_running(REFERENCE_LOCK)
+    resolution_running, resolution_pid, resolution_lock_meta = process_running(RESOLUTION_LOCK)
+    scanner_image_name, scanner_exe_path = collector_process_meta(
+        scanner_lock_meta or read_lock_metadata(str(SCANNER_LOCK))
+    )
+    reference_image_name, reference_exe_path = collector_process_meta(
+        reference_lock_meta or read_lock_metadata(str(REFERENCE_LOCK))
+    )
+    resolution_image_name, resolution_exe_path = collector_process_meta(
+        resolution_lock_meta or read_lock_metadata(str(RESOLUTION_LOCK))
+    )
 
     snapshot_file_age = None
     if SNAPSHOT_PATH.exists():
@@ -150,9 +151,30 @@ def build_status() -> tuple[dict[str, Any], list[str]]:
         "checked_ts": now_ts,
         "db_path": str(db_path),
         "snapshot_path": str(SNAPSHOT_PATH),
-        "scanner": {"running": scanner_running, "pid": scanner_pid, "lock_path": str(SCANNER_LOCK)},
-        "reference": {"running": reference_running, "pid": reference_pid, "lock_path": str(REFERENCE_LOCK)},
-        "resolution": {"running": resolution_running, "pid": resolution_pid, "lock_path": str(RESOLUTION_LOCK)},
+        "scanner": {
+            "running": scanner_running,
+            "pid": scanner_pid,
+            "lock_path": str(SCANNER_LOCK),
+            "process_image_name": scanner_image_name,
+            "process_exe_path": scanner_exe_path,
+            "lock_meta": scanner_lock_meta or read_lock_metadata(str(SCANNER_LOCK)),
+        },
+        "reference": {
+            "running": reference_running,
+            "pid": reference_pid,
+            "lock_path": str(REFERENCE_LOCK),
+            "process_image_name": reference_image_name,
+            "process_exe_path": reference_exe_path,
+            "lock_meta": reference_lock_meta or read_lock_metadata(str(REFERENCE_LOCK)),
+        },
+        "resolution": {
+            "running": resolution_running,
+            "pid": resolution_pid,
+            "lock_path": str(RESOLUTION_LOCK),
+            "process_image_name": resolution_image_name,
+            "process_exe_path": resolution_exe_path,
+            "lock_meta": resolution_lock_meta or read_lock_metadata(str(RESOLUTION_LOCK)),
+        },
         "snapshot_file_age_sec": snapshot_file_age,
         "latest_snapshot_age_sec": None,
         "latest_reference_age_sec": None,

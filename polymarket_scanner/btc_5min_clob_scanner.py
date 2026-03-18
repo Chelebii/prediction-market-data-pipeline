@@ -38,6 +38,11 @@ from common.btc5m_dataset_db import (
 )
 from common.single_instance import acquire_single_instance_lock
 from common.bot_notify import send_alert
+from common.network_diagnostics import (
+    build_network_alert_message,
+    classify_requests_exception,
+    is_network_reason,
+)
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKSPACE_DIR = os.path.dirname(APP_DIR)
@@ -102,6 +107,9 @@ DEPTH_WINDOWS = (("within_1c", 0.01), ("within_2c", 0.02), ("within_5c", 0.05))
 _last_raw_activity_ts = 0.0
 _last_raw_activity_state = "STARTUP"
 _last_raw_activity_reason = "startup"
+_last_transport_issue_ts = 0.0
+_last_transport_issue_reason = ""
+_last_transport_issue_source = ""
 
 
 def log(msg: str):
@@ -110,6 +118,22 @@ def log(msg: str):
 
 def telegram_alert(msg: str, level: str = "ERROR"):
     send_alert(bot_label="BTC5M-CLOB", msg=msg, level=level)
+
+
+def note_transport_issue(source: str, reason: str) -> None:
+    global _last_transport_issue_ts, _last_transport_issue_reason, _last_transport_issue_source
+    _last_transport_issue_ts = time.time()
+    _last_transport_issue_reason = str(reason or "")
+    _last_transport_issue_source = str(source or "")
+    if is_network_reason(reason):
+        telegram_alert(
+            build_network_alert_message(
+                "Scanner",
+                reason,
+                extra=f"source={source}",
+            ),
+            level="WARN",
+        )
 
 
 def snapshot_age_seconds() -> Optional[float]:
@@ -148,6 +172,9 @@ def http_get(url: str, params: dict = None, timeout: int = 5) -> Optional[reques
         r = session.get(url, params=params, timeout=timeout)
         if r.status_code == 200:
             return r
+    except requests.RequestException as exc:
+        note_transport_issue("discovery", classify_requests_exception(exc))
+        return None
     except Exception:
         return None
     return None
@@ -337,8 +364,12 @@ def fetch_book(token_id: str) -> Tuple[Optional[dict], str, Optional[int]]:
             "request_latency_ms": latency_ms,
             **depth_summary,
         }, "ok", latency_ms
+    except requests.RequestException as exc:
+        reason = classify_requests_exception(exc)
+        note_transport_issue("book", reason)
+        return None, reason, _elapsed_ms(started_at)
     except Exception as e:
-        return None, f"error:{e}", _elapsed_ms(started_at)
+        return None, f"error:{e.__class__.__name__}", _elapsed_ms(started_at)
 
 
 def fetch_price(token_id: str, side: str) -> Tuple[Optional[float], str, Optional[int]]:
@@ -350,8 +381,12 @@ def fetch_price(token_id: str, side: str) -> Tuple[Optional[float], str, Optiona
             return None, f"http_{r.status_code}", latency_ms
         data = r.json()
         return float(data.get("price")), "ok", latency_ms
+    except requests.RequestException as exc:
+        reason = classify_requests_exception(exc)
+        note_transport_issue(f"price_{side.lower()}", reason)
+        return None, reason, _elapsed_ms(started_at)
     except Exception as e:
-        return None, f"error:{e}", _elapsed_ms(started_at)
+        return None, f"error:{e.__class__.__name__}", _elapsed_ms(started_at)
 
 
 def fetch_midpoint(token_id: str) -> Tuple[Optional[float], str, Optional[int]]:
@@ -366,8 +401,12 @@ def fetch_midpoint(token_id: str) -> Tuple[Optional[float], str, Optional[int]]:
         if mid is None:
             mid = data.get("mid_price")
         return float(mid), "ok", latency_ms
+    except requests.RequestException as exc:
+        reason = classify_requests_exception(exc)
+        note_transport_issue("midpoint", reason)
+        return None, reason, _elapsed_ms(started_at)
     except Exception as e:
-        return None, f"error:{e}", _elapsed_ms(started_at)
+        return None, f"error:{e.__class__.__name__}", _elapsed_ms(started_at)
 
 
 def build_side_snapshot(token_id: str) -> Tuple[Optional[dict], str, dict]:
@@ -1321,7 +1360,7 @@ def main():
     # main() scanner'i tek instance olarak ayakta tutar.
     # Uzun sure fresh snapshot uretilemezse uyarir, runtime error olursa loglar.
     global _last_raw_activity_ts, _last_raw_activity_state, _last_raw_activity_reason
-    acquire_single_instance_lock(LOCK_FILE, process_name="btc-5min-clob-scanner", on_log=log, takeover=True)
+    acquire_single_instance_lock(LOCK_FILE, process_name=COLLECTOR_NAME, on_log=log, takeover=True)
     init_dataset_writer()
     log("BTC 5MIN CLOB-only scanner started")
     error_count = 0
@@ -1361,10 +1400,15 @@ def main():
                         and not in_new_slot_grace
                         and (now - last_no_data_alert_ts) >= NO_DATA_ALERT_COOLDOWN_SEC
                     ):
+                        transport_hint = ""
+                        if _last_transport_issue_ts > 0 and (now - _last_transport_issue_ts) <= max(120.0, NO_DATA_ALERT_SEC):
+                            transport_hint = (
+                                f" last_transport={_last_transport_issue_source}:{_last_transport_issue_reason}"
+                            )
                         telegram_alert(
                             f"BTC 5MIN CLOB scanner {int(gap)}s boyunca fresh snapshot publish edemedi "
                             f"ve {int(raw_activity_gap)}s boyunca yeni raw activity gormedi. "
-                            f"last_state={_last_raw_activity_state} reason={_last_raw_activity_reason}",
+                            f"last_state={_last_raw_activity_state} reason={_last_raw_activity_reason}{transport_hint}",
                             level="WARN",
                         )
                         last_no_data_alert_ts = now

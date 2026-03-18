@@ -1,6 +1,6 @@
 # BTC5M Live Data Collection Runbook
 
-Last updated: 2026-03-16
+Last updated: 2026-03-18
 
 ## Goal
 
@@ -19,10 +19,45 @@ Periodic:
 - `scripts/btc5m_backup_dataset.py`
 - `scripts/btc5m_collection_summary.py`
 
+## Collector Executables
+
+The long-running collectors now start with collector-specific executable image names.
+This is required for VPN Split Tunnel so only BTC5M data collection traffic is forced through the VPN.
+
+Expected process image names:
+- `btc5m-scanner.exe`
+- `btc5m-reference.exe`
+- `btc5m-resolution.exe`
+
+Default executable paths on this machine:
+- `C:\Users\mavia\AppData\Local\Programs\Python\Python311\btc5m-scanner.exe`
+- `C:\Users\mavia\AppData\Local\Programs\Python\Python311\btc5m-reference.exe`
+- `C:\Users\mavia\AppData\Local\Programs\Python\Python311\btc5m-resolution.exe`
+
+Collector purpose:
+- `btc5m-scanner.exe`
+  - Runs `polymarket_scanner/btc_5min_clob_scanner.py`
+  - Collects BTC 5MIN Polymarket orderbook/snapshot/lifecycle rows
+- `btc5m-reference.exe`
+  - Runs `scripts/btc5m_reference_collector.py`
+  - Collects BTC spot reference ticks
+- `btc5m-resolution.exe`
+  - Runs `scripts/btc5m_resolution_collector.py`
+  - Collects official Polymarket market resolution updates
+
+The process image names are created by:
+- `control/scripts/ensure_btc5m_process_exes.ps1`
+
+Notes:
+- These are renamed Python interpreter executables, not wrapper-only launchers.
+- Command lines still include the `.py` script path for debugging.
+- If the renamed executables are missing, the control script can fall back to plain `python.exe`, but Split Tunnel selection should use the renamed executables.
+
 ## Control Scripts
 
 Collector control:
 - `control/scripts/btc5m_collection_control.ps1`
+- `control/scripts/ensure_btc5m_process_exes.ps1`
 
 Task Scheduler registration:
 - `control/scripts/register_btc5m_collection_tasks.ps1`
@@ -38,7 +73,7 @@ Task Scheduler registration:
 ## Startup + Task Scheduler Layout
 
 - `control/scripts/start_btc5m_collectors.cmd`
-  User logon startup entry. Opens one persistent monitor console and best-effort starts `scanner + reference + resolution`.
+  User logon startup entry. Ensures collector-specific executables exist, opens one persistent monitor console, and best-effort starts `scanner + reference + resolution`.
 - `5minbots BTC5M Health Check`
   Runs every 5 minutes.
 - `5minbots BTC5M Dataset Audit`
@@ -52,6 +87,45 @@ Important:
 - Task Scheduler tarafinda periodic jobs `wscript.exe` + hidden `.vbs` wrapper ile calisir; bu sayede console flash yapmaz.
 - Startup tarafinda tek gorunen console `control/scripts/btc5m_console_monitor.ps1` olur.
 - Monitor pencere title ile durum gosterir; stdout'a sadece state degisince veya problem olunca yazar.
+
+## NordVPN Split Tunnel Guidance
+
+Split Tunnel tarafinda secilecek uygulamalar sadece long-running BTC5M collectors olmalidir:
+- `btc5m-scanner.exe`
+- `btc5m-reference.exe`
+- `btc5m-resolution.exe`
+
+Do not select these for Split Tunnel:
+- `python.exe`
+- `powershell.exe`
+- `wscript.exe`
+- `cmd.exe`
+
+Reason:
+- `python.exe` cok genis olur ve repo disindaki baska Python araclarini da etkiler.
+- `powershell.exe`, `wscript.exe`, `cmd.exe` sadece orchestration/task wrapper gorevi gorur.
+- Asil network traffic yapan collector process'leri `btc5m-*.exe` isimleriyle calisir.
+
+Recommended operator flow:
+1. Register/start the BTC5M collection stack normally.
+2. Open Task Manager or run collector status command to confirm the 3 image names gorunuyor:
+   - `btc5m-scanner.exe`
+   - `btc5m-reference.exe`
+   - `btc5m-resolution.exe`
+3. NordVPN Split Tunnel listesinde bu 3 executable'i sec.
+4. VPN on/off sonrasi morning summary ve monitor ile collectors'in hala `RUNNING` oldugunu dogrula.
+
+Verification commands:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File control\scripts\btc5m_collection_control.ps1 -Action status
+python scripts\btc5m_collection_summary.py
+```
+
+Expected output should show:
+- `scanner ... image=btc5m-scanner.exe`
+- `reference ... image=btc5m-reference.exe`
+- `resolution ... image=btc5m-resolution.exe`
 
 ## Health Outputs
 
@@ -144,6 +218,12 @@ Latest backup metadata:
 Get-Content runtime\backups\btc5m_backup_latest.json
 ```
 
+Ensure collector-specific executables exist:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File control\scripts\ensure_btc5m_process_exes.ps1
+```
+
 ## Restore / Recovery
 
 Kural:
@@ -196,8 +276,46 @@ powershell -ExecutionPolicy Bypass -File control\scripts\btc5m_collection_contro
 
 - The machine must stay awake and online. If Windows sleep triggers, collectors stop.
 - This setup is only for data collection. `polymarket_paper_bot_5min/polymarket_paper_bot.py` is not required.
+- Startup, monitor, health, summary, and dashboard now expect collector-specific image names. If a collector is manually started with plain `python.exe`, Split Tunnel isolation becomes ambiguous and operator visibility can degrade to legacy fallback mode.
 - First success criterion is not PnL. First success criterion is:
   - DB growing
   - health checks green
   - audit moving toward `PASS`
   - no long freshness gaps
+
+## Troubleshooting
+
+If Split Tunnel does not show the expected app names:
+1. Run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File control\scripts\ensure_btc5m_process_exes.ps1
+```
+
+2. Restart collectors:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File control\scripts\btc5m_collection_control.ps1 -Action restart
+```
+
+3. Confirm status:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File control\scripts\btc5m_collection_control.ps1 -Action status
+```
+
+If status still shows `python.exe`:
+- a legacy collector may still be running
+- stop all collectors, then start again using the control script
+- verify the renamed executable files exist at the Python install path
+
+If dashboard or monitor shows scanner `STOPPED` unexpectedly:
+- check the scanner lock file:
+  - `polymarket_scanner/btc_5min_clob_scanner.lock`
+- run:
+
+```powershell
+python scripts\btc5m_collection_summary.py --json
+```
+
+- confirm `collectors.scanner.process_image_name == btc5m-scanner.exe`

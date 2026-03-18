@@ -39,6 +39,8 @@ from common.btc5m_resolution_feed import (
     derive_resolution_decision,
     fetch_gamma_market_by_slug,
 )
+from common.bot_notify import send_alert
+from common.network_diagnostics import build_network_alert_message, is_network_reason
 from common.single_instance import acquire_single_instance_lock
 
 load_dotenv(ROOT_DIR / "polymarket_scanner" / ".env")
@@ -61,6 +63,7 @@ LOCK_PATH = resolve_repo_path(
     os.getenv("BTC5M_RESOLUTION_LOCK_PATH"),
     default_path=ROOT_DIR / "runtime" / "locks" / "btc5m_resolution_collector.lock",
 )
+ALERT_DEDUPE_SEC = max(120, int(os.getenv("BTC5M_RESOLUTION_ALERT_DEDUPE_SEC", "600")))
 
 _logger = logging.getLogger("btc5m_resolution_collector")
 _logger.setLevel(logging.INFO)
@@ -329,6 +332,17 @@ def main() -> None:
                     stats["last_error_reason"] = str(exc)
                     update_run_metrics(conn, run_id, stats)
                     log(f"WARN resolution_fetch_failed | slug={market_row['market_slug']} | reason={exc}")
+                    if is_network_reason(exc):
+                        send_alert(
+                            bot_label="BTC5M-RES",
+                            msg=build_network_alert_message(
+                                "Resolution collector",
+                                str(exc),
+                                extra=f"slug={market_row['market_slug']}",
+                            ),
+                            level="WARN",
+                            dedupe_seconds=ALERT_DEDUPE_SEC,
+                        )
                     if args.once:
                         exit_status = "FAILED"
                         raise SystemExit(1)

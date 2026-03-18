@@ -23,7 +23,7 @@ from common.btc5m_ops_status import (
     collector_has_recent_error,
     latest_operational_audit_window,
 )
-from common.single_instance import _is_pid_alive
+from common.single_instance import is_lock_process_alive, read_lock_metadata
 
 load_dotenv(ROOT_DIR / "polymarket_scanner" / ".env")
 load_dotenv()
@@ -96,29 +96,21 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def read_lock_pid(lock_path: Path) -> int | None:
-    if not lock_path.exists():
-        return None
-    try:
-        raw = lock_path.read_text(encoding="utf-8").strip()
-        if not raw:
-            return None
-        if raw.isdigit():
-            return int(raw)
-        payload = json.loads(raw)
-        pid = payload.get("pid")
-        return int(pid) if pid else None
-    except Exception:
-        return None
-
-
-def process_running(lock_path: Optional[Path]) -> tuple[bool, int | None]:
+def process_running(lock_path: Optional[Path]) -> tuple[bool, int | None, dict | None]:
     if lock_path is None:
-        return False, None
-    pid = read_lock_pid(lock_path)
-    if not pid:
-        return False, None
-    return bool(_is_pid_alive(int(pid))), int(pid)
+        return False, None, None
+    return is_lock_process_alive(str(lock_path))
+
+
+def collector_process_meta(lock_meta: Any) -> tuple[str | None, str | None]:
+    if not isinstance(lock_meta, dict):
+        return None, None
+    image_name = lock_meta.get("image_name")
+    exe_path = lock_meta.get("exe_path")
+    return (
+        str(image_name) if image_name else None,
+        str(exe_path) if exe_path else None,
+    )
 
 
 def safe_age(now_ts: int, ts_value: Any) -> int | None:
@@ -285,11 +277,17 @@ def build_summary() -> dict[str, Any]:
         summary["freshness"]["snapshot_file_age_sec"] = safe_age(now_ts, int(SNAPSHOT_PATH.stat().st_mtime))
 
     for label, config in COLLECTOR_CONFIG.items():
-        running, pid = process_running(config["lock_path"])
+        running, pid, lock_meta = process_running(config["lock_path"])
+        process_image_name, process_exe_path = collector_process_meta(
+            lock_meta or (read_lock_metadata(str(config["lock_path"])) if config["lock_path"] else None)
+        )
         summary["collectors"][label] = {
             "running": running,
             "pid": pid,
             "lock_path": str(config["lock_path"]) if config["lock_path"] else None,
+            "lock_meta": lock_meta or (read_lock_metadata(str(config["lock_path"])) if config["lock_path"] else None),
+            "process_image_name": process_image_name,
+            "process_exe_path": process_exe_path,
             "latest_run": None,
         }
 
@@ -420,9 +418,11 @@ def print_text_summary(summary: dict[str, Any]) -> None:
         status = "RUNNING" if collector.get("running") else "STOPPED"
         if label == "audit" and run_info:
             status = str(run_info.get("status") or status)
+        image_name = collector.get("process_image_name") or "-"
         print(
             f"- {label}: status={status} pid={collector.get('pid') or '-'} "
-            f"last_run={format_ts(run_info.get('started_ts'))} errors={run_info.get('error_count') or 0}"
+            f"image={image_name} last_run={format_ts(run_info.get('started_ts'))} "
+            f"errors={run_info.get('error_count') or 0}"
         )
 
     print("")
