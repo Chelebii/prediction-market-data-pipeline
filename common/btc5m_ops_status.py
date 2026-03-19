@@ -14,6 +14,9 @@ EXCLUDED_AUDIT_NOTE_PREFIXES = (
 UPTIME_STRONG_RATIO = 0.95
 UPTIME_GOOD_RATIO = 0.90
 UPTIME_CAUTION_RATIO = 0.80
+MATERIAL_OPERATIONAL_FAIL_COUNT = 2
+MATERIAL_OPERATIONAL_MIN_COVERAGE = 0.97
+MATERIAL_OPERATIONAL_MAX_GAP_SEC = 9.0
 
 
 def parse_meta_json(raw_value: Any) -> dict[str, Any]:
@@ -144,3 +147,24 @@ def collector_has_recent_error(
     except Exception:
         return False
     return age_sec <= max(60, int(recent_window_sec))
+
+
+def operational_audit_is_material_failure(window: Optional[dict[str, Any]]) -> bool:
+    if not window:
+        return False
+    if str(window.get("status") or "") != "FAIL":
+        return False
+
+    fail_count = int(window.get("fail_count") or 0)
+    if fail_count >= MATERIAL_OPERATIONAL_FAIL_COUNT:
+        return True
+
+    min_coverage = window.get("min_coverage_ratio")
+    if min_coverage is not None and float(min_coverage) < MATERIAL_OPERATIONAL_MIN_COVERAGE:
+        return True
+
+    max_gap = window.get("max_gap_sec")
+    if max_gap is not None and float(max_gap) > MATERIAL_OPERATIONAL_MAX_GAP_SEC:
+        return True
+
+    return False

@@ -22,6 +22,7 @@ from common.btc5m_ops_status import (
     classify_uptime_ratio,
     collector_has_recent_error,
     latest_operational_audit_window,
+    operational_audit_is_material_failure,
 )
 from common.single_instance import is_lock_process_alive, read_lock_metadata
 
@@ -54,7 +55,7 @@ RESOLUTION_LOCK = resolve_repo_path(
 )
 
 MAX_SNAPSHOT_AGE_SEC = max(5, int(os.getenv("BTC5M_HEALTH_MAX_SNAPSHOT_AGE_SEC", "45")))
-MAX_REFERENCE_AGE_SEC = max(2, int(os.getenv("BTC5M_HEALTH_MAX_REFERENCE_AGE_SEC", "10")))
+MAX_REFERENCE_AGE_SEC = max(2, int(os.getenv("BTC5M_HEALTH_MAX_REFERENCE_AGE_SEC", "30")))
 MAX_AUDIT_AGE_SEC = max(60, int(os.getenv("BTC5M_HEALTH_MAX_AUDIT_AGE_SEC", "1800")))
 BACKUP_INTERVAL_HOURS = max(1, int(os.getenv("BTC5M_BACKUP_INTERVAL_HOURS", "6")))
 BACKUP_STALE_GRACE_SEC = max(0, int(os.getenv("BTC5M_BACKUP_STALE_GRACE_SEC", "3600")))
@@ -337,15 +338,19 @@ def build_summary() -> dict[str, Any]:
     }
 
     freshness = summary["freshness"]
+    snapshot_is_stale = False
+    reference_is_stale = False
     if summary["freshness"]["snapshot_age_sec"] is None:
         summary["warnings"].append("no_snapshot_rows_yet")
     elif summary["freshness"]["snapshot_age_sec"] > MAX_SNAPSHOT_AGE_SEC:
         summary["warnings"].append(f"snapshot_stale:{freshness['snapshot_age_sec']}s")
+        snapshot_is_stale = True
 
     if summary["freshness"]["reference_age_sec"] is None:
         summary["warnings"].append("no_reference_rows_yet")
     elif summary["freshness"]["reference_age_sec"] > MAX_REFERENCE_AGE_SEC:
         summary["warnings"].append(f"reference_stale:{freshness['reference_age_sec']}s")
+        reference_is_stale = True
 
     if summary["freshness"]["audit_age_sec"] is None:
         summary["warnings"].append("no_audit_rows_yet")
@@ -362,6 +367,10 @@ def build_summary() -> dict[str, Any]:
             run_info,
             now_ts=now_ts,
             recent_window_sec=RECENT_COLLECTOR_ERROR_WINDOW_SEC,
+        ) and (
+            (label == "scanner" and (not collector["running"] or snapshot_is_stale))
+            or (label == "reference" and (not collector["running"] or reference_is_stale))
+            or (label == "resolution" and not collector["running"])
         ):
             summary["warnings"].append(f"{label}_collector_errors:{int(run_info['error_count'])}")
 
@@ -382,7 +391,7 @@ def build_summary() -> dict[str, Any]:
     operational_status = None
     if summary["operational_audit"]:
         operational_status = str(summary["operational_audit"].get("status") or "")
-    if summary["audit"] and str(summary["audit"].get("audit_status") or "") == "FAIL" and operational_status != "PASS":
+    if summary["audit"] and str(summary["audit"].get("audit_status") or "") == "FAIL" and operational_audit_is_material_failure(summary["operational_audit"]):
         summary["warnings"].append("latest_audit_failed")
 
     if "latest_audit_failed" in summary["warnings"]:

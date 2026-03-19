@@ -266,6 +266,9 @@ Write-MonitorLine "Monitor hazir. Her sey normalse sessiz kalacak; sorun olursa 
 
 $lastSignature = $null
 $lastWasHealthy = $false
+$pendingUnhealthySignature = $null
+$pendingUnhealthyMessage = $null
+$pendingUnhealthySince = $null
 $loopCount = 0
 
 while ($true) {
@@ -275,16 +278,30 @@ while ($true) {
         $Host.UI.RawUI.WindowTitle = Get-WindowTitle -Summary $summary
         $signature = Get-StateSignature -Summary $summary
         $isHealthy = (@($summary.warnings).Count -eq 0)
+        $stateMessage = Get-StateMessage -Summary $summary
 
-        if ($signature -ne $lastSignature) {
-            if ($isHealthy) {
+        if ($isHealthy) {
+            $pendingUnhealthySignature = $null
+            $pendingUnhealthyMessage = $null
+            $pendingUnhealthySince = $null
+            if ($signature -ne $lastSignature) {
                 if (-not $lastWasHealthy) {
                     Write-MonitorLine "Sorun yok. Veri toplama normale dondu." "OK"
                 }
-            } else {
-                Write-MonitorLine (Get-StateMessage -Summary $summary) "WARN"
+                $lastSignature = $signature
             }
-            $lastSignature = $signature
+        } elseif ($signature -ne $lastSignature) {
+            if ($pendingUnhealthySignature -ne $signature) {
+                $pendingUnhealthySignature = $signature
+                $pendingUnhealthyMessage = $stateMessage
+                $pendingUnhealthySince = Get-Date
+            } elseif ($pendingUnhealthySince -and (((Get-Date) - $pendingUnhealthySince).TotalSeconds -ge [Math]::Max(10, $PollSec))) {
+                Write-MonitorLine $pendingUnhealthyMessage "WARN"
+                $lastSignature = $signature
+                $pendingUnhealthySignature = $null
+                $pendingUnhealthyMessage = $null
+                $pendingUnhealthySince = $null
+            }
         } elseif ($isHealthy -and -not $lastWasHealthy) {
             Write-MonitorLine "Sorun yok. Veri toplama normale dondu." "OK"
         }

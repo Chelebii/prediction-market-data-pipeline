@@ -19,7 +19,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from common.btc5m_dataset_db import resolve_db_path, resolve_repo_path
-from common.btc5m_ops_status import latest_operational_audit_window
+from common.btc5m_ops_status import latest_operational_audit_window, operational_audit_is_material_failure
 from common.bot_notify import send_alert
 from common.single_instance import is_lock_process_alive, read_lock_metadata
 
@@ -51,7 +51,7 @@ RESOLUTION_LOCK = resolve_repo_path(
     default_path=ROOT_DIR / "runtime" / "locks" / "btc5m_resolution_collector.lock",
 )
 MAX_SNAPSHOT_AGE_SEC = max(5, int(os.getenv("BTC5M_HEALTH_MAX_SNAPSHOT_AGE_SEC", "45")))
-MAX_REFERENCE_AGE_SEC = max(2, int(os.getenv("BTC5M_HEALTH_MAX_REFERENCE_AGE_SEC", "10")))
+MAX_REFERENCE_AGE_SEC = max(2, int(os.getenv("BTC5M_HEALTH_MAX_REFERENCE_AGE_SEC", "30")))
 MAX_AUDIT_AGE_SEC = max(60, int(os.getenv("BTC5M_HEALTH_MAX_AUDIT_AGE_SEC", "1800")))
 ALERT_DEDUPE_SEC = max(60, int(os.getenv("BTC5M_HEALTH_ALERT_DEDUPE_SEC", "1800")))
 STARTUP_GRACE_SEC = max(0, int(os.getenv("BTC5M_HEALTH_STARTUP_GRACE_SEC", "900")))
@@ -245,7 +245,7 @@ def build_status() -> tuple[dict[str, Any], list[str]]:
         operational_status = None
         if status.get("operational_audit"):
             operational_status = str(status["operational_audit"].get("status") or "")
-        if audit_row and str(audit_row["audit_status"] or "") == "FAIL" and operational_status != "PASS":
+        if audit_row and str(audit_row["audit_status"] or "") == "FAIL" and operational_audit_is_material_failure(status.get("operational_audit")):
             status["warnings"].append("latest_audit_failed")
     finally:
         conn.close()

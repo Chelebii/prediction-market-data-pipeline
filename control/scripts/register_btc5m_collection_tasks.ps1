@@ -40,10 +40,22 @@ $tasks = @(
 
 function Invoke-Schtasks {
     param([string[]]$Arguments)
+
     & schtasks.exe @Arguments
     if ($LASTEXITCODE -ne 0) {
         throw "schtasks failed: $($Arguments -join ' ')"
     }
+}
+
+function Set-TaskOperationalSettings {
+    param([string]$TaskName)
+
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+    $settings = $task.Settings
+    $settings.DisallowStartIfOnBatteries = $false
+    $settings.StopIfGoingOnBatteries = $false
+    $settings.StartWhenAvailable = $true
+    Set-ScheduledTask -TaskName $TaskName -Settings $settings | Out-Null
 }
 
 switch ($Action) {
@@ -53,6 +65,7 @@ switch ($Action) {
         foreach ($task in $tasks) {
             $args = @('/Create', '/TN', $task.Name) + $task.ScheduleArgs + @('/TR', $task.Command, '/F')
             Invoke-Schtasks $args
+            Set-TaskOperationalSettings -TaskName $task.Name
         }
     }
     'unregister' {
