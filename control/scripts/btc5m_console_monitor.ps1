@@ -155,6 +155,47 @@ function Get-WarningAgeSec {
     return $null
 }
 
+function Get-WarningTier {
+    param([string]$Warning)
+
+    if (-not $Warning) { return 'INFO' }
+
+    if (
+        $Warning -eq 'scanner_collector_not_running' -or
+        $Warning -eq 'reference_collector_not_running' -or
+        $Warning -eq 'resolution_collector_not_running' -or
+        $Warning -like 'snapshot_stale:*' -or
+        $Warning -like 'reference_stale:*' -or
+        $Warning -like 'backup_stale:*' -or
+        $Warning -like 'scanner_collector_errors:*' -or
+        $Warning -like 'reference_collector_errors:*' -or
+        $Warning -like 'resolution_collector_errors:*' -or
+        $Warning -like 'health_issue:*'
+    ) {
+        return 'ACTION'
+    }
+
+    if (
+        $Warning -like 'audit_stale:*' -or
+        $Warning -like 'health_status_stale:*' -or
+        $Warning -like 'health_warning:*' -or
+        $Warning -eq 'latest_audit_failed'
+    ) {
+        return 'WATCH'
+    }
+
+    return 'WATCH'
+}
+
+function Get-HighestWarningTier {
+    param([object[]]$Warnings)
+
+    $tiers = @($Warnings | ForEach-Object { Get-WarningTier $_ })
+    if ($tiers -contains 'ACTION') { return 'ACTION' }
+    if ($tiers -contains 'WATCH') { return 'WATCH' }
+    return 'INFO'
+}
+
 function Get-WindowTitle {
     param($Summary)
 
@@ -163,7 +204,11 @@ function Get-WindowTitle {
     $referenceAge = if ($null -ne $Summary.freshness.reference_age_sec) { [int]$Summary.freshness.reference_age_sec } else { -1 }
     $auditAge = if ($null -ne $Summary.freshness.audit_age_sec) { [int]$Summary.freshness.audit_age_sec } else { -1 }
     if ($warnings.Count -gt 0) {
-        return "BTC5M Monitor | Sorun var | snapshot=$(Format-ShortDuration $snapshotAge) reference=$(Format-ShortDuration $referenceAge) audit=$(Format-ShortDuration $auditAge)"
+        $tier = Get-HighestWarningTier -Warnings $warnings
+        if ($tier -eq 'ACTION') {
+            return "BTC5M Monitor | Mudahale gerekli | snapshot=$(Format-ShortDuration $snapshotAge) reference=$(Format-ShortDuration $referenceAge) audit=$(Format-ShortDuration $auditAge)"
+        }
+        return "BTC5M Monitor | Dikkat | snapshot=$(Format-ShortDuration $snapshotAge) reference=$(Format-ShortDuration $referenceAge) audit=$(Format-ShortDuration $auditAge)"
     }
     return "BTC5M Monitor | Veri toplaniyor | snapshot=$(Format-ShortDuration $snapshotAge) reference=$(Format-ShortDuration $referenceAge) audit=$(Format-ShortDuration $auditAge)"
 }
@@ -235,7 +280,7 @@ function Get-StateMessage {
     if ($nonStaleWarnings.Count -eq 0) {
         $auditAge = Format-PlainDuration (Get-WarningAgeSec ($warnings | Where-Object { $_ -like 'audit_stale:*' } | Select-Object -First 1))
         $healthAge = Format-PlainDuration (Get-WarningAgeSec ($warnings | Where-Object { $_ -like 'health_status_stale:*' } | Select-Object -First 1))
-        return "Veri akiyor ama kontrol raporlari gecikmis. Audit=$auditAge, Health=$healthAge."
+        return "Dikkat: Veri akiyor ama kontrol raporlari gecikmis. Audit=$auditAge, Health=$healthAge."
     }
 
     $effectiveWarnings = @()
@@ -248,7 +293,11 @@ function Get-StateMessage {
     }
 
     $plainWarnings = @($effectiveWarnings | ForEach-Object { Convert-WarningToPlainText $_ })
-    return "Sorun var: " + ($plainWarnings -join ' | ')
+    $tier = Get-HighestWarningTier -Warnings $effectiveWarnings
+    if ($tier -eq 'ACTION') {
+        return "Mudahale gerekli: " + ($plainWarnings -join ' | ')
+    }
+    return "Dikkat: " + ($plainWarnings -join ' | ')
 }
 
 if (-not $NoStart) {
