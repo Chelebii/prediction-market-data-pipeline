@@ -352,6 +352,11 @@ Ignored by default:
 - [BTC5M VPN Split Tunnel Setup](PROJECT_MANAGEMENT/Historical_Data_and_Backtesting/Strategy/BTC5M_VPN_Split_Tunnel_Setup.md)
 - [BTC5M Dataset Implementation Spec](PROJECT_MANAGEMENT/Historical_Data_and_Backtesting/Strategy/BTC5M_Dataset_Implementation_Spec.md)
 
+## Community
+
+- [Contributing Guide](CONTRIBUTING.md)
+- [Security Policy](SECURITY.md)
+
 ## License
 
 [MIT](LICENSE)
