@@ -1,7 +1,7 @@
 # BTC5M Dataset Implementation Spec
 
 ## 1. Amac
-Bu dokuman, [Backtest_Data_Collection_Plan.md](C:/Users/mavia/.openclaw/workspace-mavi-x/PROJECT_MANAGEMENT/Historical_Data_and_Backtesting/Strategy/Backtest_Data_Collection_Plan.md) icindeki dataset hedefini uygulanabilir hale getirir.
+Bu dokuman, [Backtest_Data_Collection_Plan.md](Backtest_Data_Collection_Plan.md) icindeki dataset hedefini uygulanabilir hale getirir.
 
 Bu dokumanin kapsami:
 - concrete SQLite schema
@@ -832,5 +832,5 @@ Dogru MVP:
 ---
 
 **Durum:** Implementation spec hazir
-**Bagli plan:** [Backtest_Data_Collection_Plan.md](C:/Users/mavia/.openclaw/workspace-mavi-x/PROJECT_MANAGEMENT/Historical_Data_and_Backtesting/Strategy/Backtest_Data_Collection_Plan.md)
+**Bagli plan:** [Backtest_Data_Collection_Plan.md](Backtest_Data_Collection_Plan.md)
 **Son guncelleme:** 2026-03-14

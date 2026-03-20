@@ -29,10 +29,10 @@ Expected process image names:
 - `btc5m-reference.exe`
 - `btc5m-resolution.exe`
 
-Default executable paths on this machine:
-- `C:\Users\mavia\AppData\Local\Programs\Python\Python311\btc5m-scanner.exe`
-- `C:\Users\mavia\AppData\Local\Programs\Python\Python311\btc5m-reference.exe`
-- `C:\Users\mavia\AppData\Local\Programs\Python\Python311\btc5m-resolution.exe`
+Typical Windows install paths:
+- `%LocalAppData%\Programs\Python\Python311\btc5m-scanner.exe`
+- `%LocalAppData%\Programs\Python\Python311\btc5m-reference.exe`
+- `%LocalAppData%\Programs\Python\Python311\btc5m-resolution.exe`
 
 Collector purpose:
 - `btc5m-scanner.exe`

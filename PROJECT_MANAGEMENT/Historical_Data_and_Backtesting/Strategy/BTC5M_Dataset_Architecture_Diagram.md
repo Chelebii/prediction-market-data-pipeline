@@ -311,5 +311,5 @@ En onemli ilke:
 ---
 
 **Bagli dokumanlar:**
-- [Backtest_Data_Collection_Plan.md](C:/Users/mavia/.openclaw/workspace-mavi-x/PROJECT_MANAGEMENT/Historical_Data_and_Backtesting/Strategy/Backtest_Data_Collection_Plan.md)
-- [BTC5M_Dataset_Implementation_Spec.md](C:/Users/mavia/.openclaw/workspace-mavi-x/PROJECT_MANAGEMENT/Historical_Data_and_Backtesting/Strategy/BTC5M_Dataset_Implementation_Spec.md)
+- [Backtest_Data_Collection_Plan.md](Backtest_Data_Collection_Plan.md)
+- [BTC5M_Dataset_Implementation_Spec.md](BTC5M_Dataset_Implementation_Spec.md)

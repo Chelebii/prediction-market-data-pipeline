@@ -14,10 +14,10 @@ Add these application image names to the VPN Split Tunnel allowlist:
 - `btc5m-reference.exe`
 - `btc5m-resolution.exe`
 
-Default paths on this machine:
-- `C:\Users\mavia\AppData\Local\Programs\Python\Python311\btc5m-scanner.exe`
-- `C:\Users\mavia\AppData\Local\Programs\Python\Python311\btc5m-reference.exe`
-- `C:\Users\mavia\AppData\Local\Programs\Python\Python311\btc5m-resolution.exe`
+Typical Windows install paths:
+- `%LocalAppData%\Programs\Python\Python311\btc5m-scanner.exe`
+- `%LocalAppData%\Programs\Python\Python311\btc5m-reference.exe`
+- `%LocalAppData%\Programs\Python\Python311\btc5m-resolution.exe`
 
 ## Do Not Select These
 

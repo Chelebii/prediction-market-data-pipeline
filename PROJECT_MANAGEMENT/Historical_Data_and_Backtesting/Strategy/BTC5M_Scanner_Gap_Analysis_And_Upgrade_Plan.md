@@ -3,7 +3,7 @@
 ## 1. Amac
 Bu dokumanin amaci, mevcut scanner dosyasini:
 
-- [btc_5min_clob_scanner.py](C:/Users/mavia/.openclaw/workspace-mavi-x/xPolymarketBots/polymarket_scanner/btc_5min_clob_scanner.py)
+- [btc_5min_clob_scanner.py](../../../polymarket_scanner/btc_5min_clob_scanner.py)
 
 mevcut haliyle analiz edip, dataset planina gore:
 - nelerin dogru oldugunu,
@@ -35,7 +35,7 @@ Scanner once current slot'u tercih ediyor, next slot'u ancak sona yakin yayinliy
 Bu trading davranisi icin mantikli.
 
 Ilgili kisim:
-- [btc_5min_clob_scanner.py](C:/Users/mavia/.openclaw/workspace-mavi-x/xPolymarketBots/polymarket_scanner/btc_5min_clob_scanner.py#L171)
+- `polymarket_scanner/btc_5min_clob_scanner.py` line reference `L171`
 
 ### 2.3 Validation kati saglam
 Mevcut scanner:
@@ -49,8 +49,8 @@ Mevcut scanner:
 Bu kisim dataset icin de degerli.
 
 Ilgili kisimlar:
-- [btc_5min_clob_scanner.py](C:/Users/mavia/.openclaw/workspace-mavi-x/xPolymarketBots/polymarket_scanner/btc_5min_clob_scanner.py#L270)
-- [btc_5min_clob_scanner.py](C:/Users/mavia/.openclaw/workspace-mavi-x/xPolymarketBots/polymarket_scanner/btc_5min_clob_scanner.py#L316)
+- `polymarket_scanner/btc_5min_clob_scanner.py` line reference `L270`
+- `polymarket_scanner/btc_5min_clob_scanner.py` line reference `L316`
 
 ### 2.4 Stable publish gate dogru
 Tek scan'de gelen temiz quote'u hemen publish etmiyor.
@@ -58,21 +58,21 @@ Bu da iyi.
 Transient noise'u azaltir.
 
 Ilgili kisim:
-- [btc_5min_clob_scanner.py](C:/Users/mavia/.openclaw/workspace-mavi-x/xPolymarketBots/polymarket_scanner/btc_5min_clob_scanner.py#L445)
+- `polymarket_scanner/btc_5min_clob_scanner.py` line reference `L445`
 
 ### 2.5 Atomic snapshot write dogru
 Bot tarafi icin JSON snapshot dosyasini atomik yazmasi dogru.
 Bu korunmali.
 
 Ilgili kisim:
-- [btc_5min_clob_scanner.py](C:/Users/mavia/.openclaw/workspace-mavi-x/xPolymarketBots/polymarket_scanner/btc_5min_clob_scanner.py#L391)
+- `polymarket_scanner/btc_5min_clob_scanner.py` line reference `L391`
 
 ### 2.6 No-data alert mantigi faydali
 Operational olarak scanner'in fresh snapshot uretemedigini anlamak icin gerekli.
 Bu da korunmali.
 
 Ilgili kisim:
-- [btc_5min_clob_scanner.py](C:/Users/mavia/.openclaw/workspace-mavi-x/xPolymarketBots/polymarket_scanner/btc_5min_clob_scanner.py#L484)
+- `polymarket_scanner/btc_5min_clob_scanner.py` line reference `L484`
 
 Sonuc:
 Mevcut scanner'in "live bot icin temiz snapshot uretme" gorevi genel olarak dogru.
@@ -97,7 +97,7 @@ Ama dataset icin gerekli olan:
 Mevcut haliyle bunlar yok.
 
 Ilgili kisim:
-- [btc_5min_clob_scanner.py](C:/Users/mavia/.openclaw/workspace-mavi-x/xPolymarketBots/polymarket_scanner/btc_5min_clob_scanner.py#L402)
+- `polymarket_scanner/btc_5min_clob_scanner.py` line reference `L402`
 
 Etki:
 - secim yanliligi olusur
@@ -108,8 +108,8 @@ Etki:
 Scanner `WARMUP` ve `SKIP` logluyor ama veri tabanina yazmiyor.
 
 Ilgili kisimlar:
-- [btc_5min_clob_scanner.py](C:/Users/mavia/.openclaw/workspace-mavi-x/xPolymarketBots/polymarket_scanner/btc_5min_clob_scanner.py#L447)
-- [btc_5min_clob_scanner.py](C:/Users/mavia/.openclaw/workspace-mavi-x/xPolymarketBots/polymarket_scanner/btc_5min_clob_scanner.py#L478)
+- `polymarket_scanner/btc_5min_clob_scanner.py` line reference `L447`
+- `polymarket_scanner/btc_5min_clob_scanner.py` line reference `L478`
 
 Bu dataset acisindan yetersiz.
 Cunku strateji icin en onemli sorulardan biri su:
@@ -128,14 +128,14 @@ Mevcut payload'ta:
 - `collected_ts` ve `written_ts` ayrimi yok
 
 Ilgili kisim:
-- [btc_5min_clob_scanner.py](C:/Users/mavia/.openclaw/workspace-mavi-x/xPolymarketBots/polymarket_scanner/btc_5min_clob_scanner.py#L335)
+- `polymarket_scanner/btc_5min_clob_scanner.py` line reference `L335`
 
 ## 3.4 Stale kontrolu pratikte etkisiz
 Su an scanner `payload["ts"]` degerini kendisi yaziyor, sonra hemen onun yasini kontrol ediyor.
 Bu kontrol gercek source staleness'i olcmuyor.
 
 Ilgili kisim:
-- [btc_5min_clob_scanner.py](C:/Users/mavia/.openclaw/workspace-mavi-x/xPolymarketBots/polymarket_scanner/btc_5min_clob_scanner.py#L460)
+- `polymarket_scanner/btc_5min_clob_scanner.py` line reference `L460`
 
 Bu nedenle:
 - `MAX_BOOK_AGE_SEC` dataset acisindan guvenilir bir kalite olcusu degil
@@ -146,7 +146,7 @@ Scanner `/book` endpoint'inden sadece best bid/ask ve size cekiyor.
 Ilk 3-5 level depth yok.
 
 Ilgili kisim:
-- [btc_5min_clob_scanner.py](C:/Users/mavia/.openclaw/workspace-mavi-x/xPolymarketBots/polymarket_scanner/btc_5min_clob_scanner.py#L200)
+- `polymarket_scanner/btc_5min_clob_scanner.py` line reference `L200`
 
 Etki:
 - slippage simulasyonu zayif kalir
@@ -172,8 +172,8 @@ Su durumlari explicit state olarak tutmuyor:
 - `CANCELLED`
 
 Ilgili kisim:
-- [btc_5min_clob_scanner.py](C:/Users/mavia/.openclaw/workspace-mavi-x/xPolymarketBots/polymarket_scanner/btc_5min_clob_scanner.py#L122)
-- [btc_5min_clob_scanner.py](C:/Users/mavia/.openclaw/workspace-mavi-x/xPolymarketBots/polymarket_scanner/btc_5min_clob_scanner.py#L171)
+- `polymarket_scanner/btc_5min_clob_scanner.py` line reference `L122`
+- `polymarket_scanner/btc_5min_clob_scanner.py` line reference `L171`
 
 Etki:
 - expiry sonrasi ne oldugu gorulmez
@@ -493,6 +493,6 @@ Dogru yol:
 ---
 
 **Bagli dokumanlar:**
-- [Backtest_Data_Collection_Plan.md](C:/Users/mavia/.openclaw/workspace-mavi-x/PROJECT_MANAGEMENT/Historical_Data_and_Backtesting/Strategy/Backtest_Data_Collection_Plan.md)
-- [BTC5M_Dataset_Implementation_Spec.md](C:/Users/mavia/.openclaw/workspace-mavi-x/PROJECT_MANAGEMENT/Historical_Data_and_Backtesting/Strategy/BTC5M_Dataset_Implementation_Spec.md)
-- [BTC5M_Dataset_Architecture_Diagram.md](C:/Users/mavia/.openclaw/workspace-mavi-x/PROJECT_MANAGEMENT/Historical_Data_and_Backtesting/Strategy/BTC5M_Dataset_Architecture_Diagram.md)
+- [Backtest_Data_Collection_Plan.md](Backtest_Data_Collection_Plan.md)
+- [BTC5M_Dataset_Implementation_Spec.md](BTC5M_Dataset_Implementation_Spec.md)
+- [BTC5M_Dataset_Architecture_Diagram.md](BTC5M_Dataset_Architecture_Diagram.md)
