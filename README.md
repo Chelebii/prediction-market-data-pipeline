@@ -2,54 +2,19 @@
 
 Research-grade data collection and dataset-building pipeline for Polymarket BTC 5-minute up/down markets.
 
-Preferred public repository name: `prediction-market-data-pipeline`
+This repository is a **data pipeline**, not an automated trading bot. Its job is to collect market data, measure data quality, build research datasets, and support backtesting.
 
-This repository is focused on one problem:
+## What This Repo Does
 
-- collect live BTC 5-minute prediction market data
-- measure data quality numerically
-- build leak-safe research datasets
-- generate labels from official market resolutions
-- run execution-aware backtests on the resulting dataset
+- collects live BTC 5-minute Polymarket market snapshots
+- stores top-of-book and depth summaries for YES/NO order books
+- records BTC spot reference ticks
+- tracks official market resolutions
+- runs quality audits, health checks, and backups
+- builds leak-safe features, labels, and decision datasets
+- runs execution-aware backtests on the resulting dataset
 
-The repo is Windows-first today because the current operational stack uses PowerShell, Task Scheduler, and a persistent monitor console.
-
-## Repository Status
-
-- Windows-first operational stack for a single always-on collection machine
-- actively used for live BTC 5-minute market collection
-- safe to explore without starting collectors
-- if you do start collectors, they will write local runtime artifacts under `runtime/`
-
-## What This Project Does
-
-This project continuously collects and stores:
-
-- Polymarket BTC 5-minute market snapshots
-- top-of-book and depth summaries for YES/NO sides
-- BTC spot reference ticks
-- market lifecycle and official resolution outcomes
-- dataset quality audits, health checks, and backups
-
-Then it can build:
-
-- derived features
-- official-resolution labels
-- a trainable decision dataset
-- execution-aware backtest outputs
-
-## Why It Exists
-
-Prediction market research gets noisy fast if the raw collection layer is weak.
-
-This repo was built to solve the data problem first:
-
-- no future leakage in feature generation
-- explicit quality gating at slot level
-- reproducible ETL outputs
-- operational monitoring for unattended collection
-
-## Current Scope
+## Scope
 
 Supported now:
 
@@ -64,39 +29,17 @@ Not the focus of this repo:
 
 - generic all-market support
 - cloud deployment automation
-- polished cross-platform packaging
+- cross-platform packaging
+- direct order execution or live trading automation
 
-## Repository Map
+## Why It Exists
 
-- [common](common)
-  Shared database helpers, lock handling, operational status, feeds, and backtest engine.
-- [polymarket_scanner](polymarket_scanner)
-  Live BTC5M market scanner and snapshot publisher.
-- [scripts](scripts)
-  Audit, backup, feature build, label build, decision dataset build, summaries, and backtest runner.
-- [control](control)
-  Collector control scripts, monitor console, and scheduler registration.
-- [PROJECT_MANAGEMENT](PROJECT_MANAGEMENT)
-  Specs, architecture notes, runbooks, and planning documents.
+Prediction market research gets noisy fast if the collection layer is weak. This repo is built to solve the data problem first:
 
-## Main Data Tables
-
-The live SQLite dataset is:
-
-- `runtime/data/btc5m_dataset.db`
-
-Core tables:
-
-- `btc5m_markets`
-- `btc5m_snapshots`
-- `btc5m_orderbook_depth`
-- `btc5m_reference_ticks`
-- `btc5m_reference_1m_ohlcv`
-- `btc5m_lifecycle_events`
-- `quality_audits`
-- `btc5m_features`
-- `btc5m_labels`
-- `btc5m_decision_dataset`
+- reproducible ETL outputs
+- no future leakage in feature generation
+- explicit slot-level quality gating
+- operational monitoring for unattended collection
 
 ## Architecture
 
@@ -116,13 +59,43 @@ flowchart LR
     K --> L["btc5m_run_backtest.py"]
 ```
 
+## Repository Map
+
+- [common](common)
+  Shared database helpers, lock handling, operational status, feeds, and backtest engine.
+- [polymarket_scanner](polymarket_scanner)
+  Live BTC5M market scanner and snapshot publisher.
+- [scripts](scripts)
+  Audit, backup, setup verification, feature build, label build, decision dataset build, summaries, and backtest runner.
+- [control](control)
+  Collector control scripts, monitor console, and scheduler registration.
+- [PROJECT_MANAGEMENT](PROJECT_MANAGEMENT)
+  Specs, architecture notes, runbooks, and planning documents.
+
+## Main Data Tables
+
+The live SQLite dataset is stored at `runtime/data/btc5m_dataset.db`.
+
+Core tables:
+
+- `btc5m_markets`
+- `btc5m_snapshots`
+- `btc5m_orderbook_depth`
+- `btc5m_reference_ticks`
+- `btc5m_reference_1m_ohlcv`
+- `btc5m_lifecycle_events`
+- `quality_audits`
+- `btc5m_features`
+- `btc5m_labels`
+- `btc5m_decision_dataset`
+
 ## Quick Start
 
-This section is written for someone who has never run the project before.
+This setup path is written for a fresh clone on a Windows machine.
 
 ### 1. Install prerequisites
 
-You need:
+Required:
 
 - Windows 10 or 11
 - Python 3.11
@@ -136,12 +109,12 @@ Optional but useful:
 
 ### 2. Clone the repository
 
-Use either the SSH or HTTPS clone URL:
-
 ```powershell
 git clone git@github.com:Chelebii/prediction-market-data-pipeline.git
 cd prediction-market-data-pipeline
 ```
+
+or
 
 ```powershell
 git clone https://github.com/Chelebii/prediction-market-data-pipeline.git
@@ -163,30 +136,36 @@ pip install -r requirements.txt
 
 ### 5. Create your local environment file
 
-Copy the example file:
-
 ```powershell
 Copy-Item polymarket_scanner\.env.example polymarket_scanner\.env
 ```
 
-Then edit:
+Then edit `polymarket_scanner/.env` as needed.
 
-- `polymarket_scanner/.env`
+Notes:
 
-Minimal setup:
+- the example file is safe to keep as-is for basic local setup
+- Telegram credentials are optional and only needed for alerts
+- runtime paths in the example file are repo-relative by default
+- real `.env` files are ignored by Git
 
-- leave the defaults as-is for a basic local run
-- Telegram bot credentials are optional and only needed if you want alerts
-- the example file already includes the runtime paths and collector thresholds used by the current Windows workflow
+### 6. Run the non-live setup verification
 
-Important:
+This check does **not** start collectors or write dataset rows. It verifies that the clone has the expected files, Python version, dependencies, and local env shape.
 
-- do not commit your real `.env`
-- `.env` is already ignored by Git
+```powershell
+python scripts\btc5m_verify_setup.py
+```
 
-### 6. Prepare collector-specific executables
+If you prefer structured output:
 
-These make VPN split tunneling practical by giving each collector a unique process name.
+```powershell
+python scripts\btc5m_verify_setup.py --json
+```
+
+### 7. Prepare collector-specific executables
+
+Recommended on Windows, and effectively required if you want VPN split tunneling by process name.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File control\scripts\ensure_btc5m_process_exes.ps1
@@ -198,14 +177,11 @@ Expected process names:
 - `btc5m-reference.exe`
 - `btc5m-resolution.exe`
 
-### 7. Start live data collection
+### 8. Start live data collection
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File control\scripts\btc5m_collection_control.ps1 -Action start
 ```
-
-This command is intended to be safe to re-run.
-If the collectors are already running, the control script should detect that and avoid starting duplicates.
 
 Or start the full monitor flow:
 
@@ -213,19 +189,21 @@ Or start the full monitor flow:
 control\scripts\start_btc5m_collectors.cmd
 ```
 
-### 8. Register periodic tasks
+The control script is intended to be safe to re-run and should avoid duplicate long-running collectors.
+
+### 9. Register periodic tasks
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File control\scripts\register_btc5m_collection_tasks.ps1 -Action register
 ```
 
-This sets up:
+This registers:
 
 - health check every 5 minutes
 - dataset audit every 15 minutes
 - backup every 6 hours
 
-### 9. Check whether the system is healthy
+### 10. Check whether the system is healthy
 
 ```powershell
 python scripts\btc5m_collection_summary.py
@@ -238,15 +216,9 @@ What you want to see:
 - reference freshness is low
 - no urgent warnings
 
-If freshness stays high or warnings persist after a minute or two, check the runbook and the monitor console before assuming the dataset is unusable.
+### 11. Inspect the live data
 
-### 10. Inspect the live data yourself
-
-Open the live DB in DB Browser for SQLite:
-
-- `runtime/data/btc5m_dataset.db`
-
-Useful tables to browse first:
+Open `runtime/data/btc5m_dataset.db` in DB Browser for SQLite and look at:
 
 - `btc5m_snapshots`
 - `btc5m_reference_ticks`
@@ -255,7 +227,7 @@ Useful tables to browse first:
 
 ## First-Run Checklist
 
-After initial setup, a healthy first run usually looks like this:
+A healthy first run usually looks like this:
 
 - the three collector processes appear as `btc5m-scanner.exe`, `btc5m-reference.exe`, and `btc5m-resolution.exe`
 - `python scripts\btc5m_collection_summary.py` reports no urgent warnings
@@ -340,81 +312,46 @@ Run a baseline backtest:
 python scripts\btc5m_run_backtest.py --dataset-version v1 --feature-version v1 --split-bucket train --strategy momentum
 ```
 
-## Public Repo Safety Notes
+## Known Limitations
 
-This repository is intended to be public-safe, but there are rules:
+- Windows-first operational tooling; Linux/macOS are not the primary target yet
+- setup is optimized for one always-on collection machine
+- VPN routing requirements depend on your jurisdiction and network setup
+- no packaged installer or container workflow is provided yet
+- no automated test suite is shipped yet; use `python scripts\btc5m_verify_setup.py` and the live operational summary for verification
 
-- never commit real `.env` files
-- never commit `runtime/`
-- never commit live `.db` files
-- never commit private keys or API credentials
-- rotate credentials immediately if they are ever pasted into tracked files
+## Public Repo Safety
+
+Do not commit:
+
+- real `.env` files
+- `runtime/`
+- live `.db` files
+- private keys or API credentials
 
 Ignored by default:
 
 - `.env`
+- `.env.*`
 - `runtime/`
 - `state/`
 - `*.db`
 - `*.db-shm`
 - `*.db-wal`
 - `*.log`
+- `*.log.*`
 - `*.lock`
+- `*.pem`
+- `*.key`
+- `*.p12`
+- `*.pfx`
 
-## Secret History Check
+## Operational Docs
 
-I performed a repository history check for the current publicization work.
-
-What was checked:
-
-- tracked `.env` paths in Git history
-- known Telegram token / chat id strings
-- known Polymarket live credential strings
-
-Current result:
-
-- no tracked `polymarket_scanner/.env` history found
-- no matches found for the currently known local token / key values in reachable Git history
-
-Important operational note:
-
-- local ignored `.env` files can still contain real secrets
-- that is fine for local use
-- but those values should still be treated as sensitive and rotated if they were ever shared outside the machine
-
-## VPN / Split Tunnel
-
-If you need region-specific routing, read:
-
-- [BTC5M_VPN_Split_Tunnel_Setup.md](PROJECT_MANAGEMENT/Historical_Data_and_Backtesting/Strategy/BTC5M_VPN_Split_Tunnel_Setup.md)
-
-If you use NordVPN split tunneling, the intended collector apps are:
-
-- `btc5m-scanner.exe`
-- `btc5m-reference.exe`
-- `btc5m-resolution.exe`
-
-## Monitoring and Operations
-
-Main operational reference:
-
-- [BTC5M_Live_Data_Collection_Runbook.md](PROJECT_MANAGEMENT/Historical_Data_and_Backtesting/Strategy/BTC5M_Live_Data_Collection_Runbook.md)
-
-The monitor console is designed to stay quiet when everything is healthy and only print on state change or intervention-worthy problems.
-
-## Resume-Ready Project Description
-
-Short version:
-
-> Built an end-to-end data pipeline for Polymarket BTC 5-minute prediction markets, including live market collection, quality auditing, feature/label ETL, and execution-aware backtesting.
-
-Stronger CV bullets:
-
-- Built a research-grade dataset pipeline for BTC 5-minute prediction markets using live order book snapshots, BTC reference ticks, and official market resolutions.
-- Designed slot-level quality auditing, outage detection, leak-safe feature engineering, and reproducible decision-dataset generation for strategy research.
-- Implemented unattended operational tooling for long-running collection, including process supervision, health checks, monitoring, backup/restore, and failure diagnostics.
+- [BTC5M Live Data Collection Runbook](PROJECT_MANAGEMENT/Historical_Data_and_Backtesting/Strategy/BTC5M_Live_Data_Collection_Runbook.md)
+- [BTC5M VPN Split Tunnel Setup](PROJECT_MANAGEMENT/Historical_Data_and_Backtesting/Strategy/BTC5M_VPN_Split_Tunnel_Setup.md)
+- [BTC5M Dataset Implementation Spec](PROJECT_MANAGEMENT/Historical_Data_and_Backtesting/Strategy/BTC5M_Dataset_Implementation_Spec.md)
 
 ## License
 
-No license file has been added yet.
-If you want to make the repository public for reuse by others, add an explicit license before publishing.
+[MIT](LICENSE)
