@@ -114,6 +114,18 @@ def latest_audit_summary(conn: sqlite3.Connection) -> sqlite3.Row | None:
     ).fetchone()
 
 
+def latest_collector_started_ts(conn: sqlite3.Connection, collector_name: str) -> int | None:
+    value = latest_scalar(
+        conn,
+        "SELECT started_ts FROM collector_runs WHERE collector_name=? ORDER BY started_ts DESC LIMIT 1",
+        (collector_name,),
+    )
+    try:
+        return int(value) if value is not None else None
+    except Exception:
+        return None
+
+
 def first_run_started_ts(conn: sqlite3.Connection) -> int | None:
     value = latest_scalar(conn, "SELECT MIN(started_ts) FROM collector_runs")
     try:
@@ -218,13 +230,20 @@ def build_status() -> tuple[dict[str, Any], list[str]]:
         status["startup_grace_active"] = startup_grace_active
 
         if audit_row:
+            scanner_started_ts = latest_collector_started_ts(conn, "btc5m-clob-scanner")
+            reference_started_ts = latest_collector_started_ts(conn, "btc5m-reference-collector")
+            operational_cutoff_ts = max(
+                value for value in (scanner_started_ts, reference_started_ts) if value is not None
+            ) if any(value is not None for value in (scanner_started_ts, reference_started_ts)) else None
             status["latest_audit_status"] = audit_row["audit_status"]
             status["latest_audit_notes"] = audit_row["notes"]
             status["latest_audit_slot_coverage_ratio"] = audit_row["slot_coverage_ratio"]
             status["latest_audit_max_gap_sec"] = audit_row["max_gap_sec"]
+            status["operational_audit_cutoff_ts"] = operational_cutoff_ts
             status["operational_audit"] = latest_operational_audit_window(
                 conn,
                 window_markets=OPERATIONAL_AUDIT_WINDOW_MARKETS,
+                min_slot_start_ts=operational_cutoff_ts,
             )
 
         if latest_snapshot_age is None:

@@ -1,72 +1,51 @@
-# BOT_NE_YAPAR.md  SCANNER
+# BTC5M Scanner Overview
 
-## 1) Gorev
-Scanner, tum botlara ortak kullanilan market snapshot'ini uretir ve surekli guncel tutar.
+## Purpose
 
-## 2) Girdiler
-- Polymarket/Gamma/CLOB veri kaynaklari
-- API response'lari (markets, fiyatlar, spread)
+The BTC5M scanner continuously discovers and validates the active Polymarket BTC 5-minute market, then publishes the freshest usable snapshot for the dataset pipeline.
 
-## 3) Ciktilar
-- `runtime/snapshots/polymarket_shared_snapshot.json`
-  - `ts`
-  - `markets`
-  - `mids`
-  - `spreads`
-- Scanner loglari
+## Inputs
 
-## 4) Neden kritik?
-- Diger tum botlar bu snapshot'i tuketiyor.
-- Scanner stale olursa diger botlar teknik olarak ACTIVE olsa da karar kalitesi duser.
+- Polymarket Gamma market discovery responses
+- Polymarket CLOB price, midpoint, and order book data
+- local scanner configuration from `polymarket_scanner/.env`
 
-## 5) scanner_manager ne yapiyor?
-- Scanner processini izler
-- Donma/stale veriyi tespit eder
-- Gerekirse yeniden baslatir
-- Kritik scanner alarmlarini Telegram'a yollar
+## Outputs
 
-## 6) Hangi durumlarda alarm?
-- Snapshot cok eskiyse (stale)
-- Scanner process duserse
-- API baglanti hatalari artarsa
+- `runtime/snapshots/btc_5min_clob_snapshot.json`
+- dataset rows in `runtime/data/btc5m_dataset.db`
+- scanner logs and lock files
 
-## 7) Hizli kontrol
-1. Snapshot dosyasi var mi?
-2. `ts` su anki zamana yakin mi?
-3. `markets/mids/spreads` bos mu dolu mu?
-4. scanner_manager process aktif mi?
+## Why It Matters
 
-## 8) Fail-safe
-- Tek-instance lock
-- Manager restart davranisi
-- Hata loglama + alert
+- the snapshot is the real-time view used by operational monitoring
+- the dataset DB depends on the scanner for market discovery and quote coverage
+- stale or invalid scanner output reduces downstream dataset quality
 
-## 9) Sistemdeki rolu
-- Scanner = veri omurgasi.
-- Scanner sagliksizsa trade botlarinin karari sagliksiz olur.
+## Main Responsibilities
 
-## Neye gore isleme girer / neye gore islemden cikar?
+- discover the current BTC 5-minute market
+- validate quote structure and complement consistency
+- publish only stable candidate markets
+- write snapshot, order book depth, and lifecycle rows into the dataset
+- surface actionable network and freshness problems through logs and alerts
 
-### Isleme giris (Entry)
-- Snapshot verisi gecerliyse (`ts` stale degil) aday marketler degerlendirilir.
-- Botun kendi strateji kosullari saglanmali:
-  - momentum/drift esigi
-  - spread limiti
-  - fiyat bandi uygunlugu
-  - cooldown engeli olmamasi
-  - `MAX_OPEN_POSITIONS` ve pozisyon boyutu limitleri
-- `ALLOW_NEW_ENTRIES=1` ise yeni pozisyon acilir; degilse sadece mevcut pozisyon yonetilir.
+## Quick Operator Checks
 
-### Islemden cikis (Exit)
-- Asagidaki kosullardan biri tetiklenince pozisyon kapanir:
-  - TP/Trailing stop
-  - Volatility stop veya fixed SL
-  - Time-stop (pozisyon suresi doldu)
-  - Bot/stratejiye ozel expiry/slot kurali (ozellikle 5MIN)
-- Kapanislar DB'de reason/pnl ile kayda gecer.
+1. Confirm `runtime/snapshots/btc_5min_clob_snapshot.json` exists.
+2. Confirm the snapshot timestamp is fresh.
+3. Confirm the active market slug and quote fields are populated.
+4. Confirm the collector status shows `RUNNING`.
 
-### Kritik not
-- Scanner ve Reporter trade acmaz/kapatmaz:
-  - Scanner sadece veri uretir (snapshot)
-  - Reporter sadece raporlar
-- Trade giris/cikis kararini trade botlari verir: Core/Fast/Pair/Sports/5MIN.
+## Fail-Safes
+
+- single-instance lock protection
+- warm-up gate before publishing a new candidate market
+- no-data alerting with slot-aware grace logic
+- structured invalid vs semantic reject separation for diagnostics
+
+## Role In The Pipeline
+
+- The scanner is the market-ingestion backbone of the BTC5M dataset pipeline.
+- Reference and resolution collectors enrich the dataset around it.
+- Audit, health, backup, and ETL jobs consume the resulting dataset state.

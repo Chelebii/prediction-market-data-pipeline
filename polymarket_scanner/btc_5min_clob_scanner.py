@@ -1,8 +1,8 @@
 """
 BTC 5MIN CLOB-ONLY Scanner
-- Gamma sadece market discovery icin kullanilir.
-- Fiyat/spread verisi sadece CLOB /book kaynagindan gelir.
-- Fallback fiyat YOKTUR.
+- Gamma is used only for market discovery.
+- Price and spread data come only from the CLOB /book source.
+- There is no fallback price.
 """
 
 import atexit
@@ -39,9 +39,11 @@ from common.btc5m_dataset_db import (
 from common.single_instance import acquire_single_instance_lock
 from common.bot_notify import send_alert
 from common.network_diagnostics import (
-    build_network_alert_message,
+    build_network_intervention_message,
+    clear_network_alert_state,
     classify_requests_exception,
     is_network_reason,
+    note_network_alert_state,
 )
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -49,8 +51,8 @@ WORKSPACE_DIR = os.path.dirname(APP_DIR)
 load_dotenv(os.path.join(APP_DIR, ".env"))
 load_dotenv()
 
-# Bu ayarlar scanner'in ne kadar sik tarayacagini ve veriyi ne kadar sert filtreleyecegini belirler.
-# Yeni baslayan biri icin en kritik alanlar:
+# These settings control scan cadence and validation strictness.
+# The most important fields to review are:
 # - SCAN_INTERVAL_SEC
 # - MAX_PRICE_MID_GAP
 # - MAX_COMPLEMENT_GAP
@@ -110,6 +112,10 @@ _last_raw_activity_reason = "startup"
 _last_transport_issue_ts = 0.0
 _last_transport_issue_reason = ""
 _last_transport_issue_source = ""
+NETWORK_ALERT_THRESHOLD = max(2, int(os.getenv("BTC5M_SCANNER_NETWORK_ALERT_THRESHOLD", "2")))
+NETWORK_ALERT_MIN_DURATION_SEC = max(10, int(os.getenv("BTC5M_SCANNER_NETWORK_ALERT_MIN_DURATION_SEC", "15")))
+NETWORK_ALERT_RESET_SEC = max(30, int(os.getenv("BTC5M_SCANNER_NETWORK_ALERT_RESET_SEC", "90")))
+NETWORK_ALERT_STATE_KEY = "btc5m-scanner-network"
 
 
 def log(msg: str):
@@ -126,14 +132,25 @@ def note_transport_issue(source: str, reason: str) -> None:
     _last_transport_issue_reason = str(reason or "")
     _last_transport_issue_source = str(source or "")
     if is_network_reason(reason):
-        telegram_alert(
-            build_network_alert_message(
-                "Scanner",
-                reason,
-                extra=f"source={source}",
-            ),
-            level="WARN",
+        state = note_network_alert_state(
+            NETWORK_ALERT_STATE_KEY,
+            reason,
+            source=source,
+            threshold_count=NETWORK_ALERT_THRESHOLD,
+            min_duration_sec=NETWORK_ALERT_MIN_DURATION_SEC,
+            reset_after_sec=NETWORK_ALERT_RESET_SEC,
         )
+        if state["should_alert"]:
+            telegram_alert(
+                build_network_intervention_message(
+                    "Scanner",
+                    state["reason"],
+                    source=str(state["source"] or source or ""),
+                    failure_count=int(state["count"]),
+                    duration_sec=int(state["duration_sec"]),
+                ),
+                level="WARN",
+            )
 
 
 def snapshot_age_seconds() -> Optional[float]:
@@ -166,11 +183,11 @@ def record_raw_activity(state: str, reason: str = "") -> None:
 
 
 def http_get(url: str, params: dict = None, timeout: int = 5) -> Optional[requests.Response]:
-    # Hata durumunda scanner'in cok gurultulu exception basmamasi icin
-    # HTTP istegini kontrollu sekilde sariyoruz.
+    # Wrap HTTP requests so scanner failures stay controlled and non-noisy.
     try:
         r = session.get(url, params=params, timeout=timeout)
         if r.status_code == 200:
+            clear_network_alert_state(NETWORK_ALERT_STATE_KEY)
             return r
     except requests.RequestException as exc:
         note_transport_issue("discovery", classify_requests_exception(exc))
@@ -191,7 +208,7 @@ def market_slot_ts_from_slug(slug: str) -> Optional[int]:
 
 
 def is_market_active(market: dict, now_ts: int) -> bool:
-    # Gamma marketi aktif gosterse bile slot bitmisse bizim icin artik kullanisli degildir.
+    # Even if Gamma still reports the market as active, the slot is no longer useful after expiry.
     if market.get("closed") is True:
         return False
     if market.get("active") is False:
@@ -213,8 +230,8 @@ def is_market_active(market: dict, now_ts: int) -> bool:
 
 
 def fetch_btc_5min_markets() -> List[dict]:
-    # Discovery icin sadece simdiki slot ve bir sonraki slot aranir.
-    # Boylece gereksiz market taramasi yapmayiz.
+    # Discovery only scans the current slot and the next slot.
+    # This avoids unnecessary market scans.
     now_slot = (int(time.time()) // 300) * 300
     slugs = [f"{COIN}-updown-5m-{now_slot}", f"{COIN}-updown-5m-{now_slot + 300}"]
     found = []
@@ -232,8 +249,8 @@ def fetch_btc_5min_markets() -> List[dict]:
 
 
 def pick_target_markets(markets: List[dict], now_ts: int) -> List[Tuple[dict, str]]:
-    # Once current slot tercih edilir.
-    # Son saniyelere gelinmisse bir sonraki slotu publish etmeye izin verilir.
+    # Prefer the current slot first.
+    # Allow next-slot publication only near the end of the current slot.
     valid = []
     for market in markets:
         slug = str(market.get("slug", ""))
@@ -342,6 +359,7 @@ def fetch_book(token_id: str) -> Tuple[Optional[dict], str, Optional[int]]:
         latency_ms = _elapsed_ms(started_at)
         if r.status_code != 200:
             return None, f"http_{r.status_code}", latency_ms
+        clear_network_alert_state(NETWORK_ALERT_STATE_KEY)
         data = r.json()
         bids = data.get("bids", [])
         asks = data.get("asks", [])
@@ -379,6 +397,7 @@ def fetch_price(token_id: str, side: str) -> Tuple[Optional[float], str, Optiona
         latency_ms = _elapsed_ms(started_at)
         if r.status_code != 200:
             return None, f"http_{r.status_code}", latency_ms
+        clear_network_alert_state(NETWORK_ALERT_STATE_KEY)
         data = r.json()
         return float(data.get("price")), "ok", latency_ms
     except requests.RequestException as exc:
@@ -396,6 +415,7 @@ def fetch_midpoint(token_id: str) -> Tuple[Optional[float], str, Optional[int]]:
         latency_ms = _elapsed_ms(started_at)
         if r.status_code != 200:
             return None, f"http_{r.status_code}", latency_ms
+        clear_network_alert_state(NETWORK_ALERT_STATE_KEY)
         data = r.json()
         mid = data.get("mid")
         if mid is None:
@@ -410,11 +430,11 @@ def fetch_midpoint(token_id: str) -> Tuple[Optional[float], str, Optional[int]]:
 
 
 def build_side_snapshot(token_id: str) -> Tuple[Optional[dict], str, dict]:
-    # Tek bir taraf (YES veya NO) icin gereken tum quote verisini topluyoruz.
-    # Buradaki amac su:
-    # - price endpoint ile midpoint birbirini dogruluyor mu
-    # - spread mantikli mi
-    # - book metadata'si mevcut mu
+    # Collect all quote inputs needed for one side (YES or NO).
+    # The goal is to verify:
+    # - whether the price endpoint and midpoint agree
+    # - whether the spread is reasonable
+    # - whether book metadata is available
     side_started_at = time.perf_counter()
     book_data, book_reason, book_latency_ms = fetch_book(token_id)
     buy_price, buy_reason, buy_latency_ms = fetch_price(token_id, "BUY")
@@ -501,8 +521,8 @@ def build_side_snapshot(token_id: str) -> Tuple[Optional[dict], str, dict]:
 
 
 def validate_cross_market(market: dict, yes_data: dict, no_data: dict) -> Tuple[bool, str]:
-    # YES ve NO tokenlari birbirinin tamamlaniyor olmasi gerekir.
-    # Toplamlari 1'e cok uzaksa veri supheli sayilir.
+    # YES and NO tokens should remain complementary.
+    # If their sums drift too far from 1, the quote is treated as suspicious.
     liquidity = float(market.get("liquidity") or market.get("liquidityNum") or 0)
     if liquidity < MIN_LIQUIDITY:
         return False, f"liquidity_low {liquidity:.2f} < {MIN_LIQUIDITY:.2f}"
@@ -520,8 +540,8 @@ def validate_cross_market(market: dict, yes_data: dict, no_data: dict) -> Tuple[
 
 
 def build_snapshot(market: dict, yes_data: dict, no_data: dict, reason: str) -> dict:
-    # Botun okuyacagi tek dosya bu payload ile uretilir.
-    # O yuzden gereken metadata'yi burada acikca sakliyoruz.
+    # This payload produces the single snapshot file consumed by monitoring and ops.
+    # Store the required metadata explicitly here.
     now_ts = int(time.time())
     yes_token_id, no_token_id = parse_clob_ids(market)
     slug = str(market.get("slug", ""))
@@ -1087,12 +1107,12 @@ def write_candidate_observation_to_db(
 
 def scan_once() -> bool:
     global _last_candidate_slug, _last_candidate_passes
-    # Scanner'in tek tur mantigi:
+    # Single scan-cycle flow:
     # 1) market discovery
-    # 2) current/next slot secimi
-    # 3) YES/NO quote toplama
+    # 2) current/next slot selection
+    # 3) YES/NO quote collection
     # 4) validation
-    # 5) yeterince stabilse snapshot publish
+    # 5) publish if stability requirements are met
     now_ts = int(time.time())
     markets = fetch_btc_5min_markets()
     candidates = pick_target_markets(markets, now_ts)
@@ -1242,8 +1262,8 @@ def scan_once() -> bool:
             _last_candidate_slug = slug
             _last_candidate_passes = 1
 
-        # Tek sefer temiz quote gormek yetmez.
-        # Ayni aday market birkac taramada ust uste temiz gelirse publish edilir.
+        # One clean quote pass is not enough.
+        # Publish only after the same candidate stays clean across multiple scans.
         if _last_candidate_passes < max(1, MIN_STABLE_PASSES):
             record_raw_activity("WARMUP", f"stable_pass={_last_candidate_passes}/{max(1, MIN_STABLE_PASSES)}")
             write_candidate_observation_to_db(
@@ -1357,8 +1377,8 @@ def scan_once() -> bool:
 
 
 def main():
-    # main() scanner'i tek instance olarak ayakta tutar.
-    # Uzun sure fresh snapshot uretilemezse uyarir, runtime error olursa loglar.
+    # Keep the scanner alive as a single instance.
+    # Warn on prolonged freshness failures and log runtime errors.
     global _last_raw_activity_ts, _last_raw_activity_state, _last_raw_activity_reason
     acquire_single_instance_lock(LOCK_FILE, process_name=COLLECTOR_NAME, on_log=log, takeover=True)
     init_dataset_writer()
@@ -1406,8 +1426,8 @@ def main():
                                 f" last_transport={_last_transport_issue_source}:{_last_transport_issue_reason}"
                             )
                         telegram_alert(
-                            f"BTC 5MIN CLOB scanner {int(gap)}s boyunca fresh snapshot publish edemedi "
-                            f"ve {int(raw_activity_gap)}s boyunca yeni raw activity gormedi. "
+                            f"BTC 5MIN CLOB scanner could not publish a fresh snapshot for {int(gap)}s "
+                            f"and saw no new raw activity for {int(raw_activity_gap)}s. "
                             f"last_state={_last_raw_activity_state} reason={_last_raw_activity_reason}{transport_hint}",
                             level="WARN",
                         )

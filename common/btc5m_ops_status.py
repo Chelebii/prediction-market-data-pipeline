@@ -37,6 +37,7 @@ def latest_operational_audit_window(
     conn: sqlite3.Connection,
     *,
     window_markets: int,
+    min_slot_start_ts: Optional[int] = None,
 ) -> dict[str, Any] | None:
     summary_row = conn.execute(
         "SELECT run_id, audit_ts, audit_status, notes "
@@ -59,6 +60,7 @@ def latest_operational_audit_window(
         FROM quality_audits qa
         JOIN btc5m_markets m ON m.market_id = qa.market_id
         WHERE qa.run_id = ?
+          AND (? IS NULL OR m.slot_start_ts >= ?)
           AND (
             qa.notes IS NULL
             OR (
@@ -69,7 +71,7 @@ def latest_operational_audit_window(
         ORDER BY m.slot_end_ts DESC
         LIMIT ?
         """,
-        (summary_row["run_id"], limit),
+        (summary_row["run_id"], min_slot_start_ts, min_slot_start_ts, limit),
     ).fetchall()
     if not rows:
         return None
@@ -92,6 +94,7 @@ def latest_operational_audit_window(
         "avg_coverage_ratio": (sum(coverage_values) / len(coverage_values)) if coverage_values else None,
         "max_gap_sec": max(gap_values) if gap_values else None,
         "fail_market_slugs": [str(row["market_slug"]) for row in fail_rows[:10]],
+        "min_slot_start_ts": int(min_slot_start_ts) if min_slot_start_ts is not None else None,
     }
 
 

@@ -8,10 +8,8 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $scriptDir '..\..')
 Set-Location $repoRoot
 
-$controlScript = Join-Path $repoRoot 'control\scripts\btc5m_collection_control.ps1'
-$startupSource = Join-Path $repoRoot 'control\scripts\start_btc5m_collectors.cmd'
 $startupDir = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup'
-$startupTarget = Join-Path $startupDir 'start_btc5m_collectors.cmd'
+$startupTarget = Join-Path $startupDir 'start_prediction_market_data_pipeline_btc5m_collectors.cmd'
 $healthRunner = Join-Path $repoRoot 'control\scripts\run_btc5m_healthcheck.cmd'
 $auditRunner = Join-Path $repoRoot 'control\scripts\run_btc5m_dataset_audit.cmd'
 $backupRunner = Join-Path $repoRoot 'control\scripts\run_btc5m_backup_dataset.cmd'
@@ -22,17 +20,17 @@ $wscriptExe = Join-Path $env:SystemRoot 'System32\wscript.exe'
 
 $tasks = @(
     @{
-        Name = '5minbots BTC5M Health Check'
+        Name = 'Prediction Market Data Pipeline BTC5M Health Check'
         ScheduleArgs = @('/SC', 'MINUTE', '/MO', '5', '/ST', '00:03')
         Command = '"' + $wscriptExe + '" //B //Nologo "' + $healthHiddenRunner + '"'
     },
     @{
-        Name = '5minbots BTC5M Dataset Audit'
+        Name = 'Prediction Market Data Pipeline BTC5M Dataset Audit'
         ScheduleArgs = @('/SC', 'MINUTE', '/MO', '15', '/ST', '00:01')
         Command = '"' + $wscriptExe + '" //B //Nologo "' + $auditHiddenRunner + '"'
     },
     @{
-        Name = '5minbots BTC5M Dataset Backup'
+        Name = 'Prediction Market Data Pipeline BTC5M Dataset Backup'
         ScheduleArgs = @('/SC', 'HOURLY', '/MO', '6', '/ST', '00:10')
         Command = '"' + $wscriptExe + '" //B //Nologo "' + $backupHiddenRunner + '"'
     }
@@ -47,21 +45,87 @@ function Invoke-Schtasks {
     }
 }
 
+function Remove-TaskIfExists {
+    param([string]$TaskName)
+
+    if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+        & schtasks.exe /Delete /TN $TaskName /F | Out-Null
+    }
+}
+
+function Get-LegacyTaskNames {
+    $expectedSuffixes = @(
+        'BTC5M Health Check',
+        'BTC5M Dataset Audit',
+        'BTC5M Dataset Backup'
+    )
+    $currentNames = @($tasks | ForEach-Object { $_.Name })
+    $legacyNames = @()
+    foreach ($scheduledTask in @(Get-ScheduledTask -ErrorAction SilentlyContinue)) {
+        if ($scheduledTask.TaskName -in $currentNames) {
+            continue
+        }
+        foreach ($suffix in $expectedSuffixes) {
+            if ($scheduledTask.TaskName -like "*$suffix") {
+                $legacyNames += $scheduledTask.TaskName
+                break
+            }
+        }
+    }
+    return @($legacyNames | Select-Object -Unique)
+}
+
+function Get-LegacyStartupTargets {
+    return @(
+        Get-ChildItem -Path $startupDir -Filter '*btc5m_collectors.cmd' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -ne $startupTarget } |
+            Select-Object -ExpandProperty FullName
+    )
+}
+
+function Write-StartupStub {
+    param(
+        [string]$TargetPath,
+        [string]$RepoRootPath
+    )
+
+    $startupScriptPath = Join-Path $repoRootPath 'control\scripts\start_btc5m_collectors.cmd'
+    $content = @"
+@echo off
+setlocal
+call "$startupScriptPath"
+"@
+    Set-Content -Path $TargetPath -Value $content -Encoding ASCII
+}
+
 function Set-TaskOperationalSettings {
     param([string]$TaskName)
 
-    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
-    $settings = $task.Settings
-    $settings.DisallowStartIfOnBatteries = $false
-    $settings.StopIfGoingOnBatteries = $false
-    $settings.StartWhenAvailable = $true
+    $settings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable `
+        -ExecutionTimeLimit (New-TimeSpan -Seconds 0) `
+        -DontStopOnIdleEnd `
+        -IdleDuration (New-TimeSpan -Minutes 10) `
+        -IdleWaitTimeout (New-TimeSpan -Hours 1) `
+        -MultipleInstances IgnoreNew `
+        -Priority 7
     Set-ScheduledTask -TaskName $TaskName -Settings $settings | Out-Null
 }
 
 switch ($Action) {
     'register' {
         New-Item -ItemType Directory -Force -Path $startupDir | Out-Null
-        Copy-Item $startupSource $startupTarget -Force
+        foreach ($legacyTarget in (@(Get-LegacyStartupTargets) + $startupTarget | Select-Object -Unique)) {
+            if (Test-Path $legacyTarget) {
+                Remove-Item $legacyTarget -Force -ErrorAction SilentlyContinue
+            }
+        }
+        Write-StartupStub -TargetPath $startupTarget -RepoRootPath $repoRoot.Path
+        foreach ($legacyTaskName in @(Get-LegacyTaskNames)) {
+            Remove-TaskIfExists -TaskName $legacyTaskName
+        }
         foreach ($task in $tasks) {
             $args = @('/Create', '/TN', $task.Name) + $task.ScheduleArgs + @('/TR', $task.Command, '/F')
             Invoke-Schtasks $args
@@ -69,23 +133,31 @@ switch ($Action) {
         }
     }
     'unregister' {
-        if (Test-Path $startupTarget) {
-            Remove-Item $startupTarget -Force -ErrorAction SilentlyContinue
+        foreach ($legacyTarget in (@(Get-LegacyStartupTargets) + $startupTarget | Select-Object -Unique)) {
+            if (Test-Path $legacyTarget) {
+                Remove-Item $legacyTarget -Force -ErrorAction SilentlyContinue
+            }
+        }
+        foreach ($legacyTaskName in @(Get-LegacyTaskNames)) {
+            Remove-TaskIfExists -TaskName $legacyTaskName
         }
         foreach ($task in $tasks) {
-            Invoke-Schtasks @('/Delete', '/TN', $task.Name, '/F')
+            Remove-TaskIfExists -TaskName $task.Name
         }
     }
     'status' {
         Write-Host "`n=== Startup folder entry ===" -ForegroundColor Cyan
-        if (Test-Path $startupTarget) {
-            Get-Item $startupTarget | Select-Object FullName,Length,LastWriteTime
+        $startupEntries = @(@(Get-LegacyStartupTargets) + $startupTarget | Select-Object -Unique | Where-Object { Test-Path $_ })
+        if ($startupEntries.Count -gt 0) {
+            Get-Item $startupEntries | Select-Object FullName,Length,LastWriteTime
         } else {
             Write-Host "Startup entry missing." -ForegroundColor DarkYellow
         }
-        foreach ($task in $tasks) {
-            Write-Host "`n=== $($task.Name) ===" -ForegroundColor Cyan
-            & schtasks.exe /Query /FO LIST /TN $task.Name
+        foreach ($taskName in @(@($tasks | ForEach-Object { $_.Name }) + @(Get-LegacyTaskNames) | Select-Object -Unique)) {
+            if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+                Write-Host "`n=== $taskName ===" -ForegroundColor Cyan
+                & schtasks.exe /Query /FO LIST /TN $taskName
+            }
         }
     }
 }

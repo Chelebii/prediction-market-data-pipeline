@@ -85,7 +85,7 @@ function Acquire-MonitorLock {
 
     $lockInfo = Get-MonitorLockInfo
     if ($lockInfo -and (Test-MonitorProcessAlive -ProcId $lockInfo.pid)) {
-        Write-MonitorLine "Monitor zaten acik. Ikinci pencere kapatiliyor." "WARN"
+        Write-MonitorLine "Monitor is already running. Closing the second window." "WARN"
         exit 0
     }
 
@@ -114,19 +114,19 @@ function Format-PlainDuration {
 
     if ($null -eq $TotalSec -or $TotalSec -lt 0) { return '-' }
     $seconds = [int]$TotalSec
-    if ($seconds -lt 60) { return "$seconds sn" }
+    if ($seconds -lt 60) { return "$seconds sec" }
 
     $minutes = [math]::Floor($seconds / 60)
     $remain = $seconds % 60
-    if ($minutes -lt 60) { return "$minutes dk $remain sn" }
+    if ($minutes -lt 60) { return "$minutes min $remain sec" }
 
     $hours = [math]::Floor($minutes / 60)
     $minutes = $minutes % 60
-    if ($hours -lt 24) { return "$hours sa $minutes dk" }
+    if ($hours -lt 24) { return "$hours hr $minutes min" }
 
     $days = [math]::Floor($hours / 24)
     $hours = $hours % 24
-    return "$days gun $hours sa"
+    return "$days day $hours hr"
 }
 
 function Format-ShortDuration {
@@ -143,6 +143,17 @@ function Format-ShortDuration {
     $hours = [math]::Floor($minutes / 60)
     $minutes = $minutes % 60
     return "${hours}h${minutes}m"
+}
+
+function Format-PlainTimestamp {
+    param([Nullable[int]]$Ts)
+
+    if ($null -eq $Ts -or $Ts -le 0) { return '-' }
+    try {
+        return (Get-Date -Date ([DateTimeOffset]::FromUnixTimeSeconds([int64]$Ts).LocalDateTime) -Format 'yyyy-MM-dd HH:mm:ss')
+    } catch {
+        return '-'
+    }
 }
 
 function Get-WarningAgeSec {
@@ -206,31 +217,31 @@ function Get-WindowTitle {
     if ($warnings.Count -gt 0) {
         $tier = Get-HighestWarningTier -Warnings $warnings
         if ($tier -eq 'ACTION') {
-            return "BTC5M Monitor | Mudahale gerekli | snapshot=$(Format-ShortDuration $snapshotAge) reference=$(Format-ShortDuration $referenceAge) audit=$(Format-ShortDuration $auditAge)"
+            return "Prediction Market Data Pipeline | BTC5M Monitor | Action required | snapshot=$(Format-ShortDuration $snapshotAge) reference=$(Format-ShortDuration $referenceAge) audit=$(Format-ShortDuration $auditAge)"
         }
-        return "BTC5M Monitor | Dikkat | snapshot=$(Format-ShortDuration $snapshotAge) reference=$(Format-ShortDuration $referenceAge) audit=$(Format-ShortDuration $auditAge)"
+        return "Prediction Market Data Pipeline | BTC5M Monitor | Attention | snapshot=$(Format-ShortDuration $snapshotAge) reference=$(Format-ShortDuration $referenceAge) audit=$(Format-ShortDuration $auditAge)"
     }
-    return "BTC5M Monitor | Veri toplaniyor | snapshot=$(Format-ShortDuration $snapshotAge) reference=$(Format-ShortDuration $referenceAge) audit=$(Format-ShortDuration $auditAge)"
+    return "Prediction Market Data Pipeline | BTC5M Monitor | Collecting data | snapshot=$(Format-ShortDuration $snapshotAge) reference=$(Format-ShortDuration $referenceAge) audit=$(Format-ShortDuration $auditAge)"
 }
 
 function Convert-WarningToPlainText {
     param([string]$Warning)
 
-    if (-not $Warning) { return "Bilinmeyen uyari" }
-    if ($Warning -like 'scanner_collector_not_running') { return 'Scanner calismiyor.' }
-    if ($Warning -like 'reference_collector_not_running') { return 'Reference collector calismiyor.' }
-    if ($Warning -like 'resolution_collector_not_running') { return 'Resolution collector calismiyor.' }
-    if ($Warning -like 'snapshot_stale:*') { return "Scanner yeni veri yazmiyor ($(Format-PlainDuration (Get-WarningAgeSec $Warning)))." }
-    if ($Warning -like 'reference_stale:*') { return "Reference veri akmiyor ($(Format-PlainDuration (Get-WarningAgeSec $Warning)))." }
-    if ($Warning -like 'audit_stale:*') { return "Audit guncellenmedi ($(Format-PlainDuration (Get-WarningAgeSec $Warning)))." }
-    if ($Warning -like 'backup_stale:*') { return "Backup gecikmis ($(Format-PlainDuration (Get-WarningAgeSec $Warning)))." }
-    if ($Warning -like 'health_status_stale:*') { return "Health durumu guncellenmedi ($(Format-PlainDuration (Get-WarningAgeSec $Warning)))." }
-    if ($Warning -like 'health_issue:*') { return ("Saglik problemi: " + $Warning.Substring(13)) }
+    if (-not $Warning) { return "Unknown warning" }
+    if ($Warning -like 'scanner_collector_not_running') { return 'Scanner is not running.' }
+    if ($Warning -like 'reference_collector_not_running') { return 'Reference collector is not running.' }
+    if ($Warning -like 'resolution_collector_not_running') { return 'Resolution collector is not running.' }
+    if ($Warning -like 'snapshot_stale:*') { return "Scanner has stopped writing fresh data ($(Format-PlainDuration (Get-WarningAgeSec $Warning)))." }
+    if ($Warning -like 'reference_stale:*') { return "Reference data is stale ($(Format-PlainDuration (Get-WarningAgeSec $Warning)))." }
+    if ($Warning -like 'audit_stale:*') { return "Audit has not been refreshed ($(Format-PlainDuration (Get-WarningAgeSec $Warning)))." }
+    if ($Warning -like 'backup_stale:*') { return "Backup is overdue ($(Format-PlainDuration (Get-WarningAgeSec $Warning)))." }
+    if ($Warning -like 'health_status_stale:*') { return "Health status has not been refreshed ($(Format-PlainDuration (Get-WarningAgeSec $Warning)))." }
+    if ($Warning -like 'health_issue:*') { return ("Health issue: " + $Warning.Substring(13)) }
     if ($Warning -like 'health_warning:*') { return ("Health warning: " + $Warning.Substring(15)) }
-    if ($Warning -like 'scanner_collector_errors:*') { return ("Scanner son run'da hata verdi (" + ($Warning -split ':', 2)[1] + ").") }
-    if ($Warning -like 'reference_collector_errors:*') { return ("Reference collector son run'da hata verdi (" + ($Warning -split ':', 2)[1] + ").") }
-    if ($Warning -like 'resolution_collector_errors:*') { return ("Resolution collector son run'da hata verdi (" + ($Warning -split ':', 2)[1] + ").") }
-    if ($Warning -eq 'latest_audit_failed') { return 'Son genel audit basarisiz. Bu anlik toplama bozuldu demek olmayabilir.' }
+    if ($Warning -like 'scanner_collector_errors:*') { return ("Scanner reported errors in the latest run (" + ($Warning -split ':', 2)[1] + ").") }
+    if ($Warning -like 'reference_collector_errors:*') { return ("Reference collector reported errors in the latest run (" + ($Warning -split ':', 2)[1] + ").") }
+    if ($Warning -like 'resolution_collector_errors:*') { return ("Resolution collector reported errors in the latest run (" + ($Warning -split ':', 2)[1] + ").") }
+    if ($Warning -eq 'latest_audit_failed') { return 'The latest aggregate audit failed. This does not necessarily mean live collection is currently broken.' }
     return $Warning
 }
 
@@ -273,14 +284,14 @@ function Get-StateMessage {
     $referenceImage = if ($Summary.collectors.reference.process_image_name) { [string]$Summary.collectors.reference.process_image_name } else { '-' }
     $resolutionImage = if ($Summary.collectors.resolution.process_image_name) { [string]$Summary.collectors.resolution.process_image_name } else { '-' }
     if ($warnings.Count -eq 0) {
-        return "Veri toplaniyor. Scanner=${scannerImage}, Reference=${referenceImage}, Resolution=${resolutionImage}"
+        return "Data collection is healthy. Scanner=${scannerImage}, Reference=${referenceImage}, Resolution=${resolutionImage}"
     }
 
     $nonStaleWarnings = @($warnings | Where-Object { $_ -notmatch '^(audit_stale|health_status_stale):' })
     if ($nonStaleWarnings.Count -eq 0) {
         $auditAge = Format-PlainDuration (Get-WarningAgeSec ($warnings | Where-Object { $_ -like 'audit_stale:*' } | Select-Object -First 1))
         $healthAge = Format-PlainDuration (Get-WarningAgeSec ($warnings | Where-Object { $_ -like 'health_status_stale:*' } | Select-Object -First 1))
-        return "Dikkat: Veri akiyor ama kontrol raporlari gecikmis. Audit=$auditAge, Health=$healthAge."
+        return "Attention: data is still flowing, but control reports are stale. Audit=$auditAge, Health=$healthAge."
     }
 
     $effectiveWarnings = @()
@@ -295,15 +306,96 @@ function Get-StateMessage {
     $plainWarnings = @($effectiveWarnings | ForEach-Object { Convert-WarningToPlainText $_ })
     $tier = Get-HighestWarningTier -Warnings $effectiveWarnings
     if ($tier -eq 'ACTION') {
-        return "Mudahale gerekli: " + ($plainWarnings -join ' | ')
+        return "Action required: " + ($plainWarnings -join ' | ')
     }
-    return "Dikkat: " + ($plainWarnings -join ' | ')
+    return "Attention: " + ($plainWarnings -join ' | ')
 }
+
+function Get-RecoveryPlan {
+    param($Summary)
+
+    $targetActions = @{}
+    $reasons = New-Object System.Collections.Generic.List[string]
+    $warnings = @($Summary.warnings)
+
+    if (-not [bool]$Summary.collectors.scanner.running -or $warnings -contains 'scanner_collector_not_running') {
+        $targetActions['scanner'] = 'start'
+        $reasons.Add('scanner_not_running')
+    } elseif (@($warnings | Where-Object { $_ -like 'snapshot_stale:*' }).Count -gt 0) {
+        $targetActions['scanner'] = 'restart'
+        $reasons.Add('snapshot_stale')
+    }
+
+    if (-not [bool]$Summary.collectors.reference.running -or $warnings -contains 'reference_collector_not_running') {
+        $targetActions['reference'] = 'start'
+        $reasons.Add('reference_not_running')
+    } elseif (@($warnings | Where-Object { $_ -like 'reference_stale:*' }).Count -gt 0) {
+        $targetActions['reference'] = 'restart'
+        $reasons.Add('reference_stale')
+    }
+
+    if (-not [bool]$Summary.collectors.resolution.running -or $warnings -contains 'resolution_collector_not_running') {
+        $targetActions['resolution'] = 'start'
+        $reasons.Add('resolution_not_running')
+    }
+
+    $startTargets = @($targetActions.GetEnumerator() | Where-Object { $_.Value -eq 'start' } | ForEach-Object { $_.Key } | Sort-Object)
+    $restartTargets = @($targetActions.GetEnumerator() | Where-Object { $_.Value -eq 'restart' } | ForEach-Object { $_.Key } | Sort-Object)
+    $reasonsText = @($reasons | Select-Object -Unique | Sort-Object)
+
+    return [ordered]@{
+        has_plan = ($startTargets.Count -gt 0 -or $restartTargets.Count -gt 0)
+        start_targets = $startTargets
+        restart_targets = $restartTargets
+        reasons = $reasonsText
+        signature = ((@($startTargets | ForEach-Object { "start:$($_)" }) + @($restartTargets | ForEach-Object { "restart:$($_)" }) + @($reasonsText | ForEach-Object { "reason:$($_)" })) -join '|')
+    }
+}
+
+function Invoke-RecoveryPlan {
+    param($Plan)
+
+    if (-not $Plan -or -not $Plan.has_plan) {
+        return
+    }
+
+    if (@($Plan.start_targets).Count -gt 0) {
+        & $controlScript -Action start -Targets (@($Plan.start_targets) -join ',') | Out-Null
+    }
+
+    if (@($Plan.restart_targets).Count -gt 0) {
+        & $controlScript -Action restart -Targets (@($Plan.restart_targets) -join ',') | Out-Null
+    }
+}
+
+function Get-RecoveryDescription {
+    param($Plan)
+
+    if (-not $Plan -or -not $Plan.has_plan) {
+        return ''
+    }
+
+    $parts = @()
+    if (@($Plan.start_targets).Count -gt 0) {
+        $parts += ("start=" + (@($Plan.start_targets) -join ','))
+    }
+    if (@($Plan.restart_targets).Count -gt 0) {
+        $parts += ("restart=" + (@($Plan.restart_targets) -join ','))
+    }
+    if (@($Plan.reasons).Count -gt 0) {
+        $parts += ("reason=" + (@($Plan.reasons) -join ','))
+    }
+    return ($parts -join ' | ')
+}
+
+$RecoveryCooldownSec = [Math]::Max(15, $PollSec)
+$RecoveryFailClosedSec = [Math]::Max(30, $PollSec * 3)
+$RecoveryMaxAttempts = 3
 
 if (-not $NoStart) {
     try {
         & $controlScript -Action start | Out-Null
-        Write-MonitorLine "collector startup check tamamlandi" "OK"
+        Write-MonitorLine "Collector startup check completed." "OK"
     } catch {
         Write-MonitorLine "collector startup check failed: $($_.Exception.Message)" "ERROR"
     }
@@ -311,13 +403,29 @@ if (-not $NoStart) {
 
 Acquire-MonitorLock
 
-Write-MonitorLine "Monitor hazir. Her sey normalse sessiz kalacak; sorun olursa buraya yazacak." "INFO"
+$startupSummary = $null
+try {
+    $startupSummary = Get-Summary
+} catch {}
+
+if ($startupSummary) {
+    $startupSnapshotTs = Format-PlainTimestamp $startupSummary.freshness.snapshot_last_ts
+    $startupReferenceTs = Format-PlainTimestamp $startupSummary.freshness.reference_last_ts
+    $startupAuditTs = Format-PlainTimestamp $startupSummary.freshness.audit_last_ts
+    Write-MonitorLine "Monitor ready. Latest DB timestamps: snapshot=$startupSnapshotTs | reference=$startupReferenceTs | audit=$startupAuditTs. If everything is healthy, this window will stay quiet." "INFO"
+} else {
+    Write-MonitorLine "Monitor ready. If everything is healthy, this window will stay quiet." "INFO"
+}
 
 $lastSignature = $null
 $lastWasHealthy = $false
 $pendingUnhealthySignature = $null
 $pendingUnhealthyMessage = $null
 $pendingUnhealthySince = $null
+$recoverySignature = $null
+$recoverySince = $null
+$recoveryLastAttemptAt = $null
+$recoveryAttempts = 0
 $loopCount = 0
 
 while ($true) {
@@ -328,18 +436,60 @@ while ($true) {
         $signature = Get-StateSignature -Summary $summary
         $isHealthy = (@($summary.warnings).Count -eq 0)
         $stateMessage = Get-StateMessage -Summary $summary
+        $recoveryPlan = Get-RecoveryPlan -Summary $summary
 
         if ($isHealthy) {
             $pendingUnhealthySignature = $null
             $pendingUnhealthyMessage = $null
             $pendingUnhealthySince = $null
+            $recoverySignature = $null
+            $recoverySince = $null
+            $recoveryLastAttemptAt = $null
+            $recoveryAttempts = 0
             if ($signature -ne $lastSignature) {
                 if (-not $lastWasHealthy) {
-                    Write-MonitorLine "Sorun yok. Veri toplama normale dondu." "OK"
+                    Write-MonitorLine "Recovered. Data collection is healthy again." "OK"
                 }
                 $lastSignature = $signature
             }
-        } elseif ($signature -ne $lastSignature) {
+        } else {
+            if ($recoveryPlan.has_plan) {
+                if ($recoverySignature -ne $recoveryPlan.signature) {
+                    $recoverySignature = $recoveryPlan.signature
+                    $recoverySince = Get-Date
+                    $recoveryLastAttemptAt = $null
+                    $recoveryAttempts = 0
+                }
+
+                $shouldAttemptRecovery = (
+                    $recoveryAttempts -lt $RecoveryMaxAttempts -and (
+                        -not $recoveryLastAttemptAt -or
+                        (((Get-Date) - $recoveryLastAttemptAt).TotalSeconds -ge $RecoveryCooldownSec)
+                    )
+                )
+                if ($shouldAttemptRecovery) {
+                    $recoveryAttempts += 1
+                    $recoveryLastAttemptAt = Get-Date
+                    $planText = Get-RecoveryDescription -Plan $recoveryPlan
+                    Write-MonitorLine "Auto-recovery attempt ${recoveryAttempts}/${RecoveryMaxAttempts} | $planText" "WARN"
+                    Invoke-RecoveryPlan -Plan $recoveryPlan
+                    Start-Sleep -Seconds 2
+                }
+
+                if ($recoverySince -and (((Get-Date) - $recoverySince).TotalSeconds -ge $RecoveryFailClosedSec) -and $recoveryAttempts -ge $RecoveryMaxAttempts) {
+                    $planText = Get-RecoveryDescription -Plan $recoveryPlan
+                    Write-MonitorLine "Monitor fail-closed: collectors could not be brought to a healthy state. $planText" "ERROR"
+                    exit 1
+                }
+            } else {
+                $recoverySignature = $null
+                $recoverySince = $null
+                $recoveryLastAttemptAt = $null
+                $recoveryAttempts = 0
+            }
+        }
+
+        if (-not $isHealthy -and $signature -ne $lastSignature) {
             if ($pendingUnhealthySignature -ne $signature) {
                 $pendingUnhealthySignature = $signature
                 $pendingUnhealthyMessage = $stateMessage
@@ -352,7 +502,7 @@ while ($true) {
                 $pendingUnhealthySince = $null
             }
         } elseif ($isHealthy -and -not $lastWasHealthy) {
-            Write-MonitorLine "Sorun yok. Veri toplama normale dondu." "OK"
+            Write-MonitorLine "Recovered. Data collection is healthy again." "OK"
         }
         $lastWasHealthy = $isHealthy
     } catch {

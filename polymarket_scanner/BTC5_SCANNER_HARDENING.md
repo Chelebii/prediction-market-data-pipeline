@@ -4,7 +4,7 @@ Last updated: 2026-03-14
 
 ## Purpose
 
-This note records the scanner-side hardening added for the BTC 5MIN flow before any real-money activation.
+This note records the scanner-side hardening added for the BTC 5MIN dataset collection flow before unattended live operation.
 
 File location:
 - `polymarket_scanner/BTC5_SCANNER_HARDENING.md`
@@ -24,8 +24,8 @@ Rule:
 - only consider next slot very near rollover (`BTC_5MIN_NEXT_SLOT_PUBLISH_AFTER_SEC`)
 
 Reason:
-- the 5MIN bot trades the current slot
-- publishing next-slot data too early can make the system look "ready" while the bot still cannot act on it
+- the dataset should represent the currently active slot
+- publishing next-slot data too early can make the system look "ready" while the current slot is still the only actionable data source
 
 ### 2. Stable publish gate
 
@@ -113,4 +113,4 @@ After hardening:
 This significantly improves scanner trustworthiness, but does not remove all external risk:
 - Polymarket API behavior can still change
 - exchange-side outages or temporary quote anomalies are still possible
-- strategy profitability is a separate problem from data correctness
+- downstream strategy research is a separate problem from data correctness

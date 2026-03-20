@@ -117,6 +117,9 @@ def load_candidate_markets(
     market_slug: str,
     include_active: bool,
 ) -> list[sqlite3.Row]:
+    # Audit the most recent markets inside the lookback window.
+    # Using ASC here causes the audit to spend its budget on stale historical slots,
+    # which then makes health warnings reflect yesterday's failures instead of current runtime quality.
     lower_bound = now_ts - (max(1, lookback_hours) * 3600)
     clauses = ["slot_end_ts >= ?"]
     params: list[Any] = [lower_bound]
@@ -138,7 +141,7 @@ def load_candidate_markets(
         "settled_ts, first_seen_ts, last_seen_ts "
         "FROM btc5m_markets "
         f"WHERE {' AND '.join(clauses)} "
-        "ORDER BY slot_end_ts ASC "
+        "ORDER BY slot_end_ts DESC "
         "LIMIT ?"
     )
     params.append(max(1, max_markets))

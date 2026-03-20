@@ -40,7 +40,12 @@ from common.btc5m_resolution_feed import (
     fetch_gamma_market_by_slug,
 )
 from common.bot_notify import send_alert
-from common.network_diagnostics import build_network_alert_message, is_network_reason
+from common.network_diagnostics import (
+    build_network_intervention_message,
+    clear_network_alert_state,
+    is_network_reason,
+    note_network_alert_state,
+)
 from common.single_instance import acquire_single_instance_lock
 
 load_dotenv(ROOT_DIR / "polymarket_scanner" / ".env")
@@ -64,6 +69,10 @@ LOCK_PATH = resolve_repo_path(
     default_path=ROOT_DIR / "runtime" / "locks" / "btc5m_resolution_collector.lock",
 )
 ALERT_DEDUPE_SEC = max(120, int(os.getenv("BTC5M_RESOLUTION_ALERT_DEDUPE_SEC", "600")))
+NETWORK_ALERT_THRESHOLD = max(2, int(os.getenv("BTC5M_RESOLUTION_NETWORK_ALERT_THRESHOLD", "2")))
+NETWORK_ALERT_MIN_DURATION_SEC = max(30, int(os.getenv("BTC5M_RESOLUTION_NETWORK_ALERT_MIN_DURATION_SEC", "45")))
+NETWORK_ALERT_RESET_SEC = max(60, int(os.getenv("BTC5M_RESOLUTION_NETWORK_ALERT_RESET_SEC", "180")))
+NETWORK_ALERT_STATE_KEY = "btc5m-resolution-network"
 
 _logger = logging.getLogger("btc5m_resolution_collector")
 _logger.setLevel(logging.INFO)
@@ -312,6 +321,7 @@ def main() -> None:
                 try:
                     status, quality_flag = process_market(conn, session, market_row, now_ts=now_ts)
                     stats["processed_count"] += 1
+                    clear_network_alert_state(NETWORK_ALERT_STATE_KEY)
                     if status == "RESOLVED":
                         stats["resolved_count"] += 1
                     elif status == "PENDING_SETTLEMENT":
@@ -333,16 +343,28 @@ def main() -> None:
                     update_run_metrics(conn, run_id, stats)
                     log(f"WARN resolution_fetch_failed | slug={market_row['market_slug']} | reason={exc}")
                     if is_network_reason(exc):
-                        send_alert(
-                            bot_label="BTC5M-RES",
-                            msg=build_network_alert_message(
-                                "Resolution collector",
-                                str(exc),
-                                extra=f"slug={market_row['market_slug']}",
-                            ),
-                            level="WARN",
-                            dedupe_seconds=ALERT_DEDUPE_SEC,
+                        state = note_network_alert_state(
+                            NETWORK_ALERT_STATE_KEY,
+                            str(exc),
+                            source=SOURCE_NAME,
+                            threshold_count=NETWORK_ALERT_THRESHOLD,
+                            min_duration_sec=NETWORK_ALERT_MIN_DURATION_SEC,
+                            reset_after_sec=NETWORK_ALERT_RESET_SEC,
                         )
+                        if state["should_alert"]:
+                            send_alert(
+                                bot_label="BTC5M-RES",
+                                msg=build_network_intervention_message(
+                                    "Resolution collector",
+                                    state["reason"],
+                                    source=str(state["source"] or SOURCE_NAME),
+                                    failure_count=int(state["count"]),
+                                    duration_sec=int(state["duration_sec"]),
+                                    extra=f"slug={market_row['market_slug']}",
+                                ),
+                                level="WARN",
+                                dedupe_seconds=ALERT_DEDUPE_SEC,
+                            )
                     if args.once:
                         exit_status = "FAILED"
                         raise SystemExit(1)

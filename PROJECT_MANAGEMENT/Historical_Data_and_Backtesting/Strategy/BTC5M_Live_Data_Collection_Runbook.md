@@ -4,7 +4,7 @@ Last updated: 2026-03-18
 
 ## Goal
 
-Run the BTC5M dataset collectors unattended so the machine can keep collecting usable research data overnight without starting the trading bot.
+Run the BTC5M dataset collectors unattended so the machine can keep collecting usable research data overnight.
 
 ## Required Processes
 
@@ -74,23 +74,23 @@ Task Scheduler registration:
 
 - `control/scripts/start_btc5m_collectors.cmd`
   User logon startup entry. Ensures collector-specific executables exist, opens one persistent monitor console, and best-effort starts `scanner + reference + resolution`.
-- `5minbots BTC5M Health Check`
+- `Prediction Market Data Pipeline BTC5M Health Check`
   Runs every 5 minutes.
-- `5minbots BTC5M Dataset Audit`
+- `Prediction Market Data Pipeline BTC5M Dataset Audit`
   Runs every 15 minutes.
-- `5minbots BTC5M Dataset Backup`
+- `Prediction Market Data Pipeline BTC5M Dataset Backup`
   Runs every 6 hours.
 
 Important:
 - Periodic tasks use wrapper `.cmd` files that first `cd` into the repo root.
 - Python scripts also normalize relative env paths against repo root, so they no longer depend on Task Scheduler working directory.
-- Task Scheduler tarafinda periodic jobs `wscript.exe` + hidden `.vbs` wrapper ile calisir; bu sayede console flash yapmaz.
-- Startup tarafinda tek gorunen console `control/scripts/btc5m_console_monitor.ps1` olur.
-- Monitor pencere title ile durum gosterir; stdout'a sadece state degisince veya problem olunca yazar.
+- Task Scheduler periodic jobs run through `wscript.exe` plus a hidden `.vbs` wrapper so they do not flash a console window.
+- The only visible startup console should be `control/scripts/btc5m_console_monitor.ps1`.
+- The monitor updates the window title with status and only prints to stdout on state changes or operator-relevant problems.
 
 ## NordVPN Split Tunnel Guidance
 
-Split Tunnel tarafinda secilecek uygulamalar sadece long-running BTC5M collectors olmalidir:
+Only the long-running BTC5M collectors should be selected for Split Tunnel:
 - `btc5m-scanner.exe`
 - `btc5m-reference.exe`
 - `btc5m-resolution.exe`
@@ -102,18 +102,18 @@ Do not select these for Split Tunnel:
 - `cmd.exe`
 
 Reason:
-- `python.exe` cok genis olur ve repo disindaki baska Python araclarini da etkiler.
-- `powershell.exe`, `wscript.exe`, `cmd.exe` sadece orchestration/task wrapper gorevi gorur.
-- Asil network traffic yapan collector process'leri `btc5m-*.exe` isimleriyle calisir.
+- `python.exe` is too broad and can affect unrelated Python tools on the machine.
+- `powershell.exe`, `wscript.exe`, and `cmd.exe` are only orchestration wrappers.
+- The collector processes that generate the actual network traffic run as `btc5m-*.exe`.
 
 Recommended operator flow:
 1. Register/start the BTC5M collection stack normally.
-2. Open Task Manager or run collector status command to confirm the 3 image names gorunuyor:
+2. Open Task Manager or run the collector status command to confirm the three image names are present:
    - `btc5m-scanner.exe`
    - `btc5m-reference.exe`
    - `btc5m-resolution.exe`
-3. NordVPN Split Tunnel listesinde bu 3 executable'i sec.
-4. VPN on/off sonrasi morning summary ve monitor ile collectors'in hala `RUNNING` oldugunu dogrula.
+3. Select those three executables in the NordVPN Split Tunnel list.
+4. After VPN changes, confirm via the morning summary and monitor that the collectors still show `RUNNING`.
 
 Verification commands:
 
@@ -158,9 +158,9 @@ Config source:
 - keep count: `28`
 - effective retention: `~7 days`
 - filename format: `btc5m_dataset_YYYYMMDD_HHMMSSZ.db`
-- validation: backup-copy uzerinde `PRAGMA quick_check(1)`
+- validation: run `PRAGMA quick_check(1)` against the backup copy
 - latest pointer: `runtime/backups/btc5m_backup_latest.json`
-- sidecar metadata: her backup icin `*.meta.json`
+- sidecar metadata: one `*.meta.json` file per backup
 
 ## Manual Commands
 
@@ -226,36 +226,36 @@ powershell -ExecutionPolicy Bypass -File control\scripts\ensure_btc5m_process_ex
 
 ## Restore / Recovery
 
-Kural:
-- Collector'lar calisirken live DB overwrite etme.
-- Restore once her zaman `scanner + reference + resolution` durdur.
+Rules:
+- Do not overwrite the live DB while the collectors are running.
+- Always stop `scanner + reference + resolution` before restore.
 
-1. Collector'lari durdur:
+1. Stop the collectors:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File control\scripts\btc5m_collection_control.ps1 -Action stop
 ```
 
-2. Gerekirse mevcut live DB'yi quarantine kopyasi olarak ayir:
+2. If needed, preserve the current live DB as a quarantine copy:
 
 ```powershell
 Copy-Item runtime\data\btc5m_dataset.db runtime\data\btc5m_dataset_pre_restore.db
 ```
 
-3. Restore edilecek backup'i sec ve live path'e kopyala:
+3. Select the backup to restore and copy it to the live path:
 
 ```powershell
 Copy-Item runtime\backups\btc5m_dataset_YYYYMMDD_HHMMSSZ.db runtime\data\btc5m_dataset.db -Force
 ```
 
-4. Eski WAL/SHM kalintilari varsa temizle:
+4. Remove old WAL/SHM leftovers if present:
 
 ```powershell
 Remove-Item runtime\data\btc5m_dataset.db-wal -ErrorAction SilentlyContinue
 Remove-Item runtime\data\btc5m_dataset.db-shm -ErrorAction SilentlyContinue
 ```
 
-5. Restore edilen DB'yi hizli dogrula:
+5. Run a quick verification on the restored DB:
 
 ```powershell
 @'
@@ -266,7 +266,7 @@ conn.close()
 '@ | python -
 ```
 
-6. Collector'lari yeniden baslat:
+6. Restart the collectors:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File control\scripts\btc5m_collection_control.ps1 -Action start
@@ -275,8 +275,8 @@ powershell -ExecutionPolicy Bypass -File control\scripts\btc5m_collection_contro
 ## Operational Notes
 
 - The machine must stay awake and online. If Windows sleep triggers, collectors stop.
-- This setup is only for data collection. `polymarket_paper_bot_5min/polymarket_paper_bot.py` is not required.
-- Startup, monitor, health, summary, and dashboard now expect collector-specific image names. If a collector is manually started with plain `python.exe`, Split Tunnel isolation becomes ambiguous and operator visibility can degrade to legacy fallback mode.
+- This setup is only for data collection.
+- Startup, monitor, health, and summary scripts expect collector-specific image names. If a collector is manually started with plain `python.exe`, Split Tunnel isolation becomes ambiguous and operator visibility can degrade to legacy fallback mode.
 - First success criterion is not PnL. First success criterion is:
   - DB growing
   - health checks green
@@ -309,7 +309,7 @@ If status still shows `python.exe`:
 - stop all collectors, then start again using the control script
 - verify the renamed executable files exist at the Python install path
 
-If dashboard or monitor shows scanner `STOPPED` unexpectedly:
+If the monitor shows scanner `STOPPED` unexpectedly:
 - check the scanner lock file:
   - `polymarket_scanner/btc_5min_clob_scanner.lock`
 - run:

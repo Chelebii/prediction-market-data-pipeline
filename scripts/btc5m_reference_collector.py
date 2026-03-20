@@ -40,7 +40,12 @@ from common.btc5m_reference_feed import (
     normalize_symbol,
 )
 from common.bot_notify import send_alert
-from common.network_diagnostics import build_network_alert_message, is_network_reason
+from common.network_diagnostics import (
+    build_network_intervention_message,
+    clear_network_alert_state,
+    is_network_reason,
+    note_network_alert_state,
+)
 from common.single_instance import acquire_single_instance_lock
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -57,6 +62,10 @@ BASE_URL = str(os.getenv("BTC5M_REFERENCE_BASE_URL", BINANCE_SPOT_BASE_URL)).str
 LOG_PATH = Path(os.getenv("BTC5M_REFERENCE_LOG_PATH", ROOT_DIR / "runtime" / "logs" / "btc5m_reference_collector.log"))
 LOCK_PATH = Path(os.getenv("BTC5M_REFERENCE_LOCK_PATH", ROOT_DIR / "runtime" / "locks" / "btc5m_reference_collector.lock"))
 ALERT_DEDUPE_SEC = max(120, int(os.getenv("BTC5M_REFERENCE_ALERT_DEDUPE_SEC", "600")))
+NETWORK_ALERT_THRESHOLD = max(3, int(os.getenv("BTC5M_REFERENCE_NETWORK_ALERT_THRESHOLD", "3")))
+NETWORK_ALERT_MIN_DURATION_SEC = max(10, int(os.getenv("BTC5M_REFERENCE_NETWORK_ALERT_MIN_DURATION_SEC", "15")))
+NETWORK_ALERT_RESET_SEC = max(30, int(os.getenv("BTC5M_REFERENCE_NETWORK_ALERT_RESET_SEC", "60")))
+NETWORK_ALERT_STATE_KEY = "btc5m-reference-network"
 
 _logger = logging.getLogger("btc5m_reference_collector")
 _logger.setLevel(logging.INFO)
@@ -160,6 +169,7 @@ def main() -> None:
                 )
                 inserted = insert_reference_tick(conn, tick_row)
                 tick_count += inserted
+                clear_network_alert_state(NETWORK_ALERT_STATE_KEY)
                 maybe_insert_completed_candle(conn, aggregator, tick_row)
                 update_run_metrics(conn, run_id, reference_tick_count=tick_count, error_count=error_count)
                 log(
@@ -184,16 +194,28 @@ def main() -> None:
                 update_run_metrics(conn, run_id, reference_tick_count=tick_count, error_count=error_count)
                 log(f"WARN reference_fetch_failed | reason={exc}")
                 if is_network_reason(exc):
-                    send_alert(
-                        bot_label="BTC5M-REF",
-                        msg=build_network_alert_message(
-                            "Reference collector",
-                            str(exc),
-                            extra=f"source={SOURCE_NAME} symbol={SYMBOL}",
-                        ),
-                        level="WARN",
-                        dedupe_seconds=ALERT_DEDUPE_SEC,
+                    state = note_network_alert_state(
+                        NETWORK_ALERT_STATE_KEY,
+                        str(exc),
+                        source=SOURCE_NAME,
+                        threshold_count=NETWORK_ALERT_THRESHOLD,
+                        min_duration_sec=NETWORK_ALERT_MIN_DURATION_SEC,
+                        reset_after_sec=NETWORK_ALERT_RESET_SEC,
                     )
+                    if state["should_alert"]:
+                        send_alert(
+                            bot_label="BTC5M-REF",
+                            msg=build_network_intervention_message(
+                                "Reference collector",
+                                state["reason"],
+                                source=str(state["source"] or SOURCE_NAME),
+                                failure_count=int(state["count"]),
+                                duration_sec=int(state["duration_sec"]),
+                                extra=f"symbol={SYMBOL}",
+                            ),
+                            level="WARN",
+                            dedupe_seconds=ALERT_DEDUPE_SEC,
+                        )
                 if args.once:
                     raise SystemExit(1)
             except Exception as exc:

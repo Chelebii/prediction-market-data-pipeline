@@ -177,6 +177,18 @@ def latest_collector_run(conn: sqlite3.Connection, collector_name: str) -> dict[
     return dict(row) if row else None
 
 
+def latest_collector_started_ts(conn: sqlite3.Connection, collector_name: str) -> int | None:
+    value = latest_scalar(
+        conn,
+        "SELECT started_ts FROM collector_runs WHERE collector_name=? ORDER BY started_ts DESC LIMIT 1",
+        (collector_name,),
+    )
+    try:
+        return int(value) if value is not None else None
+    except Exception:
+        return None
+
+
 def latest_audit_summary(conn: sqlite3.Connection) -> dict[str, Any] | None:
     row = conn.execute(
         "SELECT run_id, audit_ts, audit_status, notes, slot_coverage_ratio, max_gap_sec, invalid_book_ratio, "
@@ -265,6 +277,9 @@ def build_summary() -> dict[str, Any]:
             "reference_age_sec": None,
             "audit_age_sec": None,
             "snapshot_file_age_sec": None,
+            "snapshot_last_ts": None,
+            "reference_last_ts": None,
+            "audit_last_ts": None,
         },
         "audit": None,
         "operational_audit": None,
@@ -311,13 +326,23 @@ def build_summary() -> dict[str, Any]:
         latest_snapshot_ts = latest_scalar(conn, "SELECT MAX(collected_ts) FROM btc5m_snapshots")
         latest_reference_ts = latest_scalar(conn, "SELECT MAX(ts_utc) FROM btc5m_reference_ticks")
         audit_summary = latest_audit_summary(conn)
+        summary["freshness"]["snapshot_last_ts"] = int(latest_snapshot_ts) if latest_snapshot_ts is not None else None
+        summary["freshness"]["reference_last_ts"] = int(latest_reference_ts) if latest_reference_ts is not None else None
+        summary["freshness"]["audit_last_ts"] = int(audit_summary["audit_ts"]) if audit_summary and audit_summary.get("audit_ts") is not None else None
         summary["freshness"]["snapshot_age_sec"] = safe_age(now_ts, latest_snapshot_ts)
         summary["freshness"]["reference_age_sec"] = safe_age(now_ts, latest_reference_ts)
         summary["freshness"]["audit_age_sec"] = safe_age(now_ts, audit_summary["audit_ts"] if audit_summary else None)
         summary["audit"] = audit_summary
+        scanner_started_ts = latest_collector_started_ts(conn, "btc5m-clob-scanner")
+        reference_started_ts = latest_collector_started_ts(conn, "btc5m-reference-collector")
+        operational_cutoff_ts = max(
+            value for value in (scanner_started_ts, reference_started_ts) if value is not None
+        ) if any(value is not None for value in (scanner_started_ts, reference_started_ts)) else None
+        summary["operational_audit_cutoff_ts"] = operational_cutoff_ts
         summary["operational_audit"] = latest_operational_audit_window(
             conn,
             window_markets=OPERATIONAL_AUDIT_WINDOW_MARKETS,
+            min_slot_start_ts=operational_cutoff_ts,
         )
 
         for label, config in COLLECTOR_CONFIG.items():

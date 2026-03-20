@@ -4,12 +4,11 @@ __pycache__/
 *.pyc
 *.pyo
 *.log
+*.log.*
 *.lock
 *.tmp
 runtime/
 state/
-polymarket_paper_bot_5min/runs/
-polymarket_paper_bot_5min/monitoring/*.json
 *.db
 *.db-shm
 *.db-wal
