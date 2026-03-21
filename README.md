@@ -69,7 +69,7 @@ flowchart LR
   Audit, backup, setup verification, feature build, label build, decision dataset build, summaries, and backtest runner.
 - [control](control)
   Collector control scripts, monitor console, and scheduler registration.
-- [PROJECT_MANAGEMENT](PROJECT_MANAGEMENT)
+- [docs](docs)
   Specs, architecture notes, runbooks, and planning documents.
 
 ## Main Data Tables
@@ -348,9 +348,9 @@ Ignored by default:
 
 ## Operational Docs
 
-- [BTC5M Live Data Collection Runbook](PROJECT_MANAGEMENT/Historical_Data_and_Backtesting/Strategy/BTC5M_Live_Data_Collection_Runbook.md)
-- [BTC5M VPN Split Tunnel Setup](PROJECT_MANAGEMENT/Historical_Data_and_Backtesting/Strategy/BTC5M_VPN_Split_Tunnel_Setup.md)
-- [BTC5M Dataset Implementation Spec](PROJECT_MANAGEMENT/Historical_Data_and_Backtesting/Strategy/BTC5M_Dataset_Implementation_Spec.md)
+- [BTC5M Live Data Collection Runbook](docs/operations/BTC5M_Live_Data_Collection_Runbook.md)
+- [BTC5M VPN Split Tunnel Setup](docs/operations/BTC5M_VPN_Split_Tunnel_Setup.md)
+- [BTC5M Dataset Implementation Spec](docs/strategy/BTC5M_Dataset_Implementation_Spec.md)
 
 ## Community
 

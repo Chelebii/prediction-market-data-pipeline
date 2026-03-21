@@ -1,7 +1,8 @@
 # BTC5M Dataset Architecture Diagram
 
-## 1. Buyuk resim
-Asagidaki diyagram, BTC 5min up/down dataset akisini uctan uca gosterir.
+## 1. Big Picture
+
+The diagram below shows the end-to-end BTC 5-minute up/down dataset flow.
 
 ```mermaid
 flowchart LR
@@ -27,24 +28,25 @@ flowchart LR
     L --> P["Later: LLM Research Layer"]
 ```
 
-Bu akisin anlami:
-- Scanner marketi bulur ve quote toplar.
-- Reference collector BTC tarafini toplar.
-- Resolution collector resmi sonucu toplar.
-- Hepsi once raw DB'ye gider.
-- Derived katman sonra uretilir.
-- Backtest ve ML raw yerine dogrudan decision dataset + raw execution katmanini kullanir.
+What this flow means:
+
+- The scanner discovers markets and collects quotes.
+- The reference collector captures the BTC side.
+- The resolution collector captures the official outcome.
+- All of them first write to the raw database.
+- The derived layer is produced afterward.
+- Backtesting and ML use the decision dataset plus the raw execution layer directly, rather than consuming raw tables blindly.
 
 ---
 
-## 2. Sistem nasil calisacak?
+## 2. How Will the System Work?
 
 ```mermaid
 flowchart TD
     A["1. Discover market"] --> B["2. Fetch YES/NO quotes"]
     B --> C["3. Fetch /book depth"]
     C --> D["4. Validate snapshot"]
-    D --> E{"Valid mi?"}
+    D --> E{"Valid?"}
     E -- "Yes" --> F["Write valid snapshot"]
     E -- "No" --> G["Write rejected snapshot + reject_reason"]
     F --> H["Write lifecycle event: PUBLISHED"]
@@ -59,14 +61,15 @@ flowchart TD
     P --> Q["Backtest / ML / research"]
 ```
 
-Buradaki en kritik nokta:
-- invalid veya reject olan data cope atilmiyor
-- onlar da dataset'in parcasi oluyor
-- cunku gercek dunya execution kalitesi ve signal reliability ancak boyle anlasilir
+The most critical point here is:
+
+- invalid or rejected data is not thrown away
+- it also becomes part of the dataset
+- because real-world execution quality and signal reliability can only be understood this way
 
 ---
 
-## 3. Raw ve derived ayrimi
+## 3. Raw vs. Derived Separation
 
 ```mermaid
 flowchart LR
@@ -97,14 +100,15 @@ flowchart LR
     D2 --> D3
 ```
 
-Mantik su:
-- raw tablolar gercegin arsivi
-- derived tablolar experiment urunu
-- feature veya label formulu degisirse raw'a dokunmadan yeniden uretiriz
+The logic is:
+
+- raw tables are the archive of reality
+- derived tables are experiment products
+- if the feature or label formula changes, we regenerate without touching raw data
 
 ---
 
-## 4. Tablo iliskileri
+## 4. Table Relationships
 
 ```mermaid
 erDiagram
@@ -188,14 +192,16 @@ erDiagram
     }
 ```
 
-Not:
-- `btc5m_reference_ticks` markete direkt FK ile bagli degil.
-- join, zaman uzerinden yapiliyor.
+Note:
+
+- `btc5m_reference_ticks` is not directly linked to a market via a foreign key.
+- The join is done through time.
 
 ---
 
-## 5. Market lifecycle
-Bu kisim zihinde net oturmali cunku backtest davranisi buradan cikacak.
+## 5. Market Lifecycle
+
+This part must be mentally clear because backtest behavior will come from here.
 
 ```mermaid
 stateDiagram-v2
@@ -214,19 +220,20 @@ stateDiagram-v2
     PUBLISHED --> CANCELLED: market invalidated
 ```
 
-Bu state machine neden gerekli?
-- cunku "trade acilabilir market" ile "sadece resolve bekleyen market" ayni sey degil
-- incident'te gordugumuz no-orderbook durumu backtest'e aynen yansitilmali
+Why is this state machine necessary?
+
+- because a "tradable market" and a "market only waiting for resolution" are not the same thing
+- the no-orderbook condition we saw in incidents must be reflected exactly in backtesting
 
 ---
 
-## 6. Label nasil ureyecek?
+## 6. How Will Labels Be Produced?
 
 ```mermaid
 flowchart TD
     A["Resolved market"] --> B["Load all snapshots for market"]
     B --> C["Filter decision candidates"]
-    C --> D{"Trainable mi?"}
+    C --> D{"Trainable?"}
     D -- "No" --> E["Write label_quality_flag + is_trainable=0"]
     D -- "Yes" --> F["Entry price from ask side"]
     F --> G["Compute hold-to-resolution target"]
@@ -237,14 +244,15 @@ flowchart TD
     K --> L["Write btc5m_decision_dataset"]
 ```
 
-Kritik kural:
-- feature sadece gecmise bakar
-- label gelecegi kullanabilir
-- train/test split market-slot bazli olur
+Critical rule:
+
+- features only look backward
+- labels may use future information
+- train/test splitting is market-slot-based
 
 ---
 
-## 7. Backtest motoru bu datayi nasil kullanacak?
+## 7. How Will the Backtest Engine Use This Data?
 
 ```mermaid
 flowchart LR
@@ -260,16 +268,17 @@ flowchart LR
     H --> K["Compare strategies"]
 ```
 
-Backtest sadece label'a bakip "dogru tahmin etti mi" demeyecek.
-Su sorulara da cevap verecek:
-- gercekten fill olabilir miydi?
-- spread maliyeti neydi?
-- expiry once cikis mumkun muydu?
-- no-orderbook durumunda ne olurdu?
+The backtest will not simply look at the label and ask, "Did it predict correctly?"
+It must also answer:
+
+- could it really have been filled?
+- what was the spread cost?
+- was it possible to exit before expiry?
+- what would happen in a no-orderbook condition?
 
 ---
 
-## 8. Uygulama sirasi
+## 8. Implementation Order
 
 ```mermaid
 flowchart TD
@@ -284,15 +293,17 @@ flowchart TD
     I --> J["Step 10\nBacktest engine"]
 ```
 
-Bu sira neden dogru?
-- once veri kaybi durur
-- sonra veri kalitesi olculur
-- sonra research katmani insa edilir
+Why is this order correct?
+
+- first, data loss is stopped
+- then data quality is measured
+- then the research layer is built
 
 ---
 
-## 9. Kisa ozet
-Bu sistemde yapacagimiz sey aslinda 3 katmanli:
+## 9. Short Summary
+
+What we are actually building in this system is a three-layer structure:
 
 1. Collection
    Scanner + reference + resolution -> raw DB
@@ -301,15 +312,16 @@ Bu sistemde yapacagimiz sey aslinda 3 katmanli:
    Audit + feature ETL + label ETL -> derived dataset
 
 3. Research
-   Backtest + ML + sonra gerekirse LLM
+   Backtest + ML + later, if needed, LLM
 
-En onemli ilke:
-- once dogru veri
-- sonra dogru label
-- sonra strateji
+The most important principle:
+
+- first correct data
+- then correct labels
+- then strategy
 
 ---
 
-**Bagli dokumanlar:**
-- [Backtest_Data_Collection_Plan.md](Backtest_Data_Collection_Plan.md)
-- [BTC5M_Dataset_Implementation_Spec.md](BTC5M_Dataset_Implementation_Spec.md)
+**Related documents:**
+- [Backtest_Data_Collection_Plan.md](../strategy/Backtest_Data_Collection_Plan.md)
+- [BTC5M_Dataset_Implementation_Spec.md](../strategy/BTC5M_Dataset_Implementation_Spec.md)

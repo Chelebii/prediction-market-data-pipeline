@@ -7,7 +7,7 @@ This repository is centered on one problem: collecting and validating BTC 5-minu
 ## Before You Start
 
 - read [README.md](README.md)
-- read the operational docs in [PROJECT_MANAGEMENT](PROJECT_MANAGEMENT)
+- read the operational docs in [docs](docs)
 - avoid widening repo scope unless the change clearly improves the BTC5M data pipeline
 
 ## Development Environment

@@ -1,40 +1,48 @@
 # BTC5M Dataset Implementation Spec
 
-## 1. Amac
-Bu dokuman, [Backtest_Data_Collection_Plan.md](Backtest_Data_Collection_Plan.md) icindeki dataset hedefini uygulanabilir hale getirir.
+## 1. Objective
 
-Bu dokumanin kapsami:
+This document turns the dataset target defined in [Backtest_Data_Collection_Plan.md](Backtest_Data_Collection_Plan.md) into an implementable plan.
+
+This document covers:
+
 - concrete SQLite schema
 - collector implementation task list
 - label ETL checklist
-- validation ve acceptance kriterleri
+- validation and acceptance criteria
 
-Odak:
-- sadece BTC 5min up/down
+Focus:
+
+- BTC 5-minute up/down only
 - raw-first dataset
-- backtest ve ML icin reusable pipeline
+- reusable pipeline for backtesting and ML
 
 ---
 
-## 2. Tasarim prensipleri
+## 2. Design Principles
 
-### 2.1 Raw immutable olmali
-Collector tarafinda yazilan raw tablolar sonradan mutate edilmemeli.
-Hatali veri duzeltilecekse:
-- yeni audit kaydi acilmali
-- yeni derived table uretilmeli
-- raw tablo overwrite edilmemeli
+### 2.1 Raw Data Must Remain Immutable
 
-### 2.2 Official resolution label'dan ayrilmamali
-`resolved_outcome` ve settlement durumu resmi market sonucundan gelmeli.
-Reference exchange price sadece:
-- feature
-- debug
+Raw tables written by the collector must not be mutated later.
+If incorrect data must be corrected:
+
+- a new audit record should be created
+- a new derived table should be generated
+- the raw table should not be overwritten
+
+### 2.2 Official Resolution Must Not Be Separated from the Label
+
+`resolved_outcome` and settlement status must come from the official market result.
+The reference exchange price should only be used for:
+
+- features
+- debugging
 - reconciliation
-icin kullanilmali.
 
-### 2.3 State kaybi olmamali
-Dataset sadece "iyi quote" anlarini degil, state gecislerini de tutmali:
+### 2.3 There Must Be No State Loss
+
+The dataset must store not only "good quote" moments, but also state transitions:
+
 - discovered
 - publishable
 - rejected
@@ -42,54 +50,55 @@ Dataset sadece "iyi quote" anlarini degil, state gecislerini de tutmali:
 - pending settlement
 - resolved
 
-### 2.4 Derived her zaman raw'dan tekrar uretilebilir olmali
-Feature ve label tablolari disposable kabul edilmeli.
+### 2.4 Derived Data Must Always Be Rebuildable from Raw Data
+
+Feature and label tables should be treated as disposable.
 
 ---
 
-## 3. Onerilen dosya/module dagilimi
+## 3. Recommended File / Module Layout
 
-Asagidaki dagilim mevcut repo yapisina uygundur:
+The following distribution fits the current repository structure:
 
 - `polymarket_scanner/btc_5min_clob_scanner.py`
   Collector main loop. Discovery, quote fetch, validation, DB write trigger.
 
 - `common/btc5m_dataset_db.py`
-  SQLite connect, schema migration, insert helpers, upsert helpers.
+  SQLite connection, schema migration, insert helpers, upsert helpers.
 
 - `common/btc5m_reference_feed.py`
-  BTC reference tick fetch ve normalize helper.
+  BTC reference tick fetch and normalization helper.
 
 - `scripts/btc5m_build_labels.py`
-  Resolution tablosundan label generation.
+  Label generation from the resolution table.
 
 - `scripts/btc5m_build_features.py`
-  Raw snapshot + reference veriden feature generation.
+  Feature generation from raw snapshots and reference data.
 
 - `scripts/btc5m_build_decision_dataset.py`
-  Feature + label join ederek final research dataset uretir.
+  Produces the final research dataset by joining features and labels.
 
 - `scripts/btc5m_audit_dataset.py`
-  Coverage, gap, missing label, invalid ratio audit.
+  Coverage, gap, missing-label, and invalid-ratio audit.
 
-Bu ayrim scanner kodunu sade tutar ve ETL mantigini runtime collector'dan ayirir.
+This separation keeps the scanner code simple and separates ETL logic from the runtime collector.
 
 ---
 
-## 4. SQLite schema
+## 4. SQLite Schema
 
-## 4.1 DB dosya onerisi
+## 4.1 Recommended DB File
 
-Tek DB ile basla:
+Start with a single DB:
 
 ```text
 runtime/data/btc5m_dataset.db
 ```
 
-WAL acik olmali.
-Collector ve offline ETL ayni anda okuyabilmeli.
+WAL should be enabled.
+The collector and offline ETL should be able to read at the same time.
 
-## 4.2 PRAGMA ayarlari
+## 4.2 PRAGMA Settings
 
 ```sql
 PRAGMA journal_mode = WAL;
@@ -99,7 +108,7 @@ PRAGMA temp_store = MEMORY;
 PRAGMA cache_size = -20000;
 ```
 
-## 4.3 Raw layer DDL
+## 4.3 Raw Layer DDL
 
 ### `btc5m_markets`
 
@@ -354,7 +363,7 @@ CREATE TABLE IF NOT EXISTS quality_audits (
 );
 ```
 
-## 4.4 Derived layer DDL
+## 4.4 Derived Layer DDL
 
 ### `btc5m_features`
 
@@ -454,38 +463,47 @@ CREATE TABLE IF NOT EXISTS btc5m_decision_dataset (
 
 ---
 
-## 5. Schema notlari
+## 5. Schema Notes
 
-### 5.1 Integer timestamp standardi
-Tum runtime timestamp alanlari Unix epoch second olarak saklansin.
-Eger ms gerekiyorsa:
-- ayri `*_ms` alanlari eklenebilir
-- ama ana join key second bazli kalsin
+### 5.1 Integer Timestamp Standard
 
-### 5.2 Bool alan standardi
-SQLite icin:
+All runtime timestamp fields should be stored as Unix epoch seconds.
+If milliseconds are needed:
+
+- separate `*_ms` fields can be added
+- but the primary join key should remain second-based
+
+### 5.2 Boolean Field Standard
+
+For SQLite:
+
 - `0 = false`
 - `1 = true`
 
 ### 5.3 Versioned ETL
-Asagidaki derived alanlar version tasimali:
+
+The following derived fields must carry versions:
+
 - `feature_version`
 - `label_version`
 - `dataset_version`
 
-Bu sayede formula degisikligi izlenebilir olur.
+This makes formula changes traceable.
 
 ---
 
-## 6. Collector task list
+## 6. Collector Task List
 
-## 6.1 Faz 1 - DB temel katmani
+## 6.1 Phase 1 - DB Foundation Layer
 
 ### Task 1
-Yeni modul ekle:
+
+Add a new module:
+
 - `common/btc5m_dataset_db.py`
 
-Icerik:
+Contents:
+
 - `connect_db(db_path)`
 - `migrate_schema(conn)`
 - `upsert_market(...)`
@@ -497,100 +515,124 @@ Icerik:
 - `finish_collector_run(...)`
 
 Definition of done:
-- schema tek fonksiyonla olusuyor
-- ikinci kez calisinca bozulmuyor
-- WAL aktif
+
+- schema is created from a single function
+- running it a second time does not break anything
+- WAL is enabled
 
 ### Task 2
-DB yolu `.env` ile configurable olsun.
 
-Yeni env:
+Make the DB path configurable through `.env`.
+
+New env:
+
 - `BTC5M_DATASET_DB_PATH`
 
 Default:
+
 - `runtime/data/btc5m_dataset.db`
 
-## 6.2 Faz 2 - Scanner raw write
+## 6.2 Phase 2 - Scanner Raw Write
 
 ### Task 3
-`polymarket_scanner/btc_5min_clob_scanner.py` icinde market metadata write ekle.
 
-Yapilacaklar:
-- market discover edilince `btc5m_markets` upsert
-- `DISCOVERED` lifecycle event yaz
-- current slot / next slot secim sebebi loglanabilir meta olarak sakla
+Add market metadata writes inside `polymarket_scanner/btc_5min_clob_scanner.py`.
+
+To do:
+
+- upsert into `btc5m_markets` when a market is discovered
+- write a `DISCOVERED` lifecycle event
+- optionally store the reason for current-slot / next-slot selection as metadata
 
 ### Task 4
-Her valid scan sonunda snapshot write ekle.
 
-Yapilacaklar:
-- mevcut `build_snapshot(...)` payload'undan DB row map et
-- `collected_ts` ve `written_ts` ayir
-- `publish_reason` ve `reject_reason` tut
-- `book_valid`, `complement_gap`, `price_mid_gap` sakla
+Add snapshot writes after every valid scan.
+
+To do:
+
+- map the current `build_snapshot(...)` payload into a DB row
+- separate `collected_ts` and `written_ts`
+- store `publish_reason` and `reject_reason`
+- store `book_valid`, `complement_gap`, `price_mid_gap`
 
 ### Task 5
-Reject edilen adaylari da kaydet.
 
-Bu kritik.
-Sadece publish edilen snapshot degil:
-- rejected candidate row
-- reject reason
-- state event
-de saklanmali.
+Store rejected candidates as well.
 
-Minimum yol:
-- `btc5m_snapshots` tablosuna `book_valid=0` ve `reject_reason`
-- ek olarak `btc5m_lifecycle_events` tablosuna `REJECTED`
+This is critical.
+Not only published snapshots, but also:
+
+- rejected candidate rows
+- reject reasons
+- state events
+
+must be stored.
+
+Minimum path:
+
+- write to `btc5m_snapshots` with `book_valid=0` and `reject_reason`
+- additionally write `REJECTED` into `btc5m_lifecycle_events`
 
 ### Task 6
-Orderbook depth summary ekle.
 
-Mevcut scanner su an top level cekiyor.
-Gelistirme:
-- `/book` response icinden ilk 3 ve ilk 5 level notional toplamlarini hesapla
-- tabloya yaz
+Add order book depth summaries.
 
-Not:
-Full raw orderbook saklamak MVP icin sart degil.
+The current scanner only fetches top-level values.
+Upgrade:
 
-## 6.3 Faz 3 - Reference feed
+- compute first-3-level and first-5-level notional totals from the `/book` response
+- write them to the table
+
+Note:
+Storing the full raw order book is not required for the MVP.
+
+## 6.3 Phase 3 - Reference Feed
 
 ### Task 7
-Yeni helper modul ekle:
+
+Add a new helper module:
+
 - `common/btc5m_reference_feed.py`
 
-Yapilacaklar:
-- Binance veya secilen source icin tick fetch
+To do:
+
+- fetch ticks from Binance or the chosen source
 - normalize field names
-- latency olc
-- 1 second cadence write
+- measure latency
+- write at 1-second cadence
 
 ### Task 8
-Reference collector loop ekle.
 
-Uygulama secenekleri:
-- scanner icinde lightweight loop
-- veya ayri process
+Add the reference collector loop.
 
-Tavsiye:
-- ilk asamada scanner icinde yap
-- sonra gerekirse ayir
+Implementation options:
+
+- a lightweight loop inside the scanner
+- or a separate process
+
+Recommendation:
+
+- keep it inside the scanner initially
+- split it later if needed
 
 ### Task 9
-Snapshot ile en yakin reference tick eslestirme kuralini sabitle.
 
-Kural:
-- snapshot ts ile reference ts farki `<= 1 sec`
-- fark buyukse `reference_sync_gap_ms` yaz
-- kalite flag dusur
+Lock down the rule for matching a snapshot to the nearest reference tick.
 
-## 6.4 Faz 4 - Lifecycle ve resolution
+Rule:
+
+- the difference between snapshot ts and reference ts must be `<= 1 sec`
+- if the difference is larger, write `reference_sync_gap_ms`
+- downgrade the quality flag
+
+## 6.4 Phase 4 - Lifecycle and Resolution
 
 ### Task 10
-Market status gecislerini explicit hale getir.
 
-Status/event list:
+Make market status transitions explicit.
+
+Status / event list:
+
 - `DISCOVERED`
 - `PUBLISHED`
 - `REJECTED`
@@ -600,160 +642,196 @@ Status/event list:
 - `CANCELLED`
 
 ### Task 11
-Resolution collector ekle.
 
-Yapilacaklar:
-- market kapaninca resmi sonuc kontrol et
-- resolution fields `btc5m_markets` ve gerekirse ayri resolution row'a yaz
-- `RESOLVED` lifecycle event ekle
+Add a resolution collector.
+
+To do:
+
+- check the official outcome when the market closes
+- write resolution fields into `btc5m_markets` and, if needed, a separate resolution row
+- add a `RESOLVED` lifecycle event
 
 ### Task 12
-Expiry sonrasi no-orderbook durumunu state olarak yakala.
 
-Neden?
-Runtime incident'te bu durum gercek.
-Backtest tarafi bunu gormek zorunda.
+Capture the post-expiry no-orderbook condition as an explicit state.
 
-Yapilacaklar:
+Why?
+This condition is real in runtime incidents.
+The backtest side must be able to see it.
+
+To do:
+
 - `orderbook_exists_yes/no`
 - `last_orderbook_seen_ts`
 - `PENDING_SETTLEMENT` event
 
-## 6.5 Faz 5 - Audit script
+## 6.5 Phase 5 - Audit Script
 
 ### Task 13
-Yeni script ekle:
+
+Add a new script:
+
 - `scripts/btc5m_audit_dataset.py`
 
-Kontroller:
+Checks:
+
 - slot coverage
-- duplicate row
+- duplicate rows
 - missing reference
 - missing resolution
 - invalid ratio
 - max snapshot gap
 
 ### Task 14
-Gunluk audit raporu tabloya ve stdout'a yazilsin.
+
+Write the daily audit report both to the table and to stdout.
 
 MVP:
+
 - console summary
 - `quality_audits` insert
 
 ---
 
-## 7. Label ETL checklist
+## 7. Label ETL Checklist
 
-## 7.1 Label ETL girdileri
-Label ETL su tablolari kullanir:
+## 7.1 Label ETL Inputs
+
+The label ETL uses these tables:
+
 - `btc5m_markets`
 - `btc5m_snapshots`
 - `btc5m_reference_ticks`
 - `btc5m_lifecycle_events`
 
-## 7.2 Label ETL adimlari
+## 7.2 Label ETL Steps
 
 ### Step 1
-Sadece terminal durumu net marketleri sec.
 
-Dahil:
+Select only markets with a clear terminal state.
+
+Include:
+
 - `RESOLVED`
 
-Disla:
+Exclude:
+
 - `ACTIVE`
 - `PENDING_SETTLEMENT`
-- `CANCELLED` unless ayri label strategy tanimliysa
+- `CANCELLED` unless a separate label strategy is defined
 
 ### Step 2
-Her market icin official terminal fields'i dogrula.
 
-Kontrol et:
+Validate the official terminal fields for each market.
+
+Check:
+
 - `resolved_outcome`
 - `resolved_yes_price`
 - `resolved_no_price`
 - `resolved_ts`
 
-Eksikse:
+If missing:
+
 - `label_quality_flag = MISSING_OFFICIAL_RESOLUTION`
-- market train set disi
+- market excluded from the training set
 
 ### Step 3
-Decision timestamp candidate'larini sec.
 
-Oneri:
-- her snapshot bir candidate olabilir
-- ama son 3 saniye veya stale snapshot'lar opsiyonel olarak dislanabilir
+Select decision timestamp candidates.
+
+Recommendation:
+
+- every snapshot can be a candidate
+- but the last 3 seconds or stale snapshots can optionally be excluded
 
 Pragmatic MVP:
+
 - `seconds_to_resolution >= 5`
 - `book_valid = 1`
-- reference sync uygun
+- acceptable reference sync
 
 ### Step 4
-Her decision row icin entry price kuralini sabitle.
 
-Tavsiye:
-- YES long icin `best_ask_yes`
-- NO long icin `best_ask_no`
+Fix the entry price rule for each decision row.
+
+Recommendation:
+
+- for YES long, use `best_ask_yes`
+- for NO long, use `best_ask_no`
 
 Hold-to-resolution return:
+
 - YES: `resolved_yes_price - entry_price`
 - NO: `resolved_no_price - entry_price`
 
 ### Step 5
-Path-dependent label'lari hesapla.
 
-Ornek:
+Compute path-dependent labels.
+
+Examples:
+
 - `best_exit_yes_before_expiry`
 - `best_exit_no_before_expiry`
 - `would_hit_tp_5c`
 - `would_hit_sl_5c`
 - `time_to_best_yes_sec`
 
-Bu hesapta:
-- sadece decision ts sonrasi snapshot'lar kullanilmali
-- expiry sonrasi no-orderbook varsa path buna gore kesilmeli veya state olarak islenmeli
+During this computation:
+
+- only snapshots after the decision ts should be used
+- if there is no order book after expiry, the path should be cut accordingly or processed as explicit state
 
 ### Step 6
-Leakage kontrolu uygula.
 
-Kurallar:
-- feature hesaplama decision ts sonrasini kullanamaz
-- ayni slotun farkli satirlari farkli split'e gidemez
-- label hesaplama future kullanabilir, feature kullanamaz
+Apply leakage controls.
+
+Rules:
+
+- feature computation cannot use data after decision ts
+- different rows from the same slot cannot go to different splits
+- label computation may use the future, feature computation may not
 
 ### Step 7
-Trainability flag belirle.
 
-`is_trainable = 1` kosullari:
-- official resolution mevcut
-- snapshot valid
-- reference sync kabul edilebilir
-- duplicate degil
-- stale degil
-- cancelled degil
+Assign the trainability flag.
 
-Aksi halde:
+Conditions for `is_trainable = 1`:
+
+- official resolution exists
+- snapshot is valid
+- reference sync is acceptable
+- not duplicate
+- not stale
+- not cancelled
+
+Otherwise:
+
 - `is_trainable = 0`
-- reason notu veya quality flag yaz
+- write a reason note or quality flag
 
 ### Step 8
-Versionli label output uret.
+
+Produce versioned label output.
 
 Output:
+
 - `btc5m_labels`
 - `btc5m_decision_dataset`
 
-Versionlar:
+Versions:
+
 - `label_version`
 - `dataset_version`
 
 ---
 
-## 8. Feature ETL checklist
+## 8. Feature ETL Checklist
 
-### Minimum feature set
-Ilk versiyonda asagidakiler yeter:
+### Minimum Feature Set
+
+For the first version, the following are sufficient:
+
 - `return_15s`
 - `return_30s`
 - `return_60s`
@@ -768,17 +846,18 @@ Ilk versiyonda asagidakiler yeter:
 - `quote_stability_score`
 - `seconds_to_resolution`
 
-### Feature kurallari
-- sadece gecmise bak
-- forward fill limitli olsun
-- missing reference varsa flag yaz
-- exact formula versionlansin
+### Feature Rules
+
+- only look backward
+- forward fill should be limited
+- if reference data is missing, write a flag
+- exact formulas should be versioned
 
 ---
 
-## 9. Acceptance kriterleri
+## 9. Acceptance Criteria
 
-Collector ve dataset "kullanilabilir" sayilmasi icin:
+For the collector and dataset to be considered "usable":
 
 - `slot_coverage_ratio >= 0.90`
 - `max_snapshot_gap_sec <= 10`
@@ -786,51 +865,55 @@ Collector ve dataset "kullanilabilir" sayilmasi icin:
 - `duplicate_snapshot_ratio < 0.01`
 - `reference_sync_gap_sec <= 1` median
 - `invalid_book_ratio < 0.20`
-- `trainable_row_ratio >= 0.70` after first stable data window
+- `trainable_row_ratio >= 0.70` after the first stable data window
 
-Bu threshold'lar sonradan optimize edilir ama ilk raporlama icin yeterli.
-
----
-
-## 10. Hemen uygulanacak coding order
-
-1. `common/btc5m_dataset_db.py` olustur.
-2. Scanner'a `btc5m_markets` ve `btc5m_snapshots` write ekle.
-3. Reject/invalid adaylari da kaydet.
-4. Reference tick writer ekle.
-5. Lifecycle event write ekle.
-6. Audit script yaz.
-7. Resolution ingestion yaz.
-8. Feature ETL yaz.
-9. Label ETL yaz.
-10. Decision dataset builder yaz.
-
-Bu sira korunursa:
-- once veri kaybi engellenir
-- sonra quality gorulur
-- sonra model/backtest tarafina gecilir
+These thresholds can be optimized later, but they are sufficient for initial reporting.
 
 ---
 
-## 11. Kisa teknik not
-MVP icin en buyuk hata su olur:
+## 10. Immediate Coding Order
 
-Sadece bot snapshot JSON'unu arsivleyip dataset saymak.
+1. Create `common/btc5m_dataset_db.py`.
+2. Add `btc5m_markets` and `btc5m_snapshots` writes to the scanner.
+3. Save rejected / invalid candidates as well.
+4. Add the reference tick writer.
+5. Add lifecycle event writes.
+6. Write the audit script.
+7. Write resolution ingestion.
+8. Write feature ETL.
+9. Write label ETL.
+10. Write the decision dataset builder.
 
-Bu yetersizdir cunku:
-- rejected candidate yok
-- lifecycle state yok
-- reference sync kaniti zayif
-- resolution metadata eksik
-- ETL reproducibility dusuk
+If this order is preserved:
 
-Dogru MVP:
-- raw DB write
+- first, data loss is prevented
+- then quality becomes visible
+- then the modeling / backtest layer is built
+
+---
+
+## 11. Short Technical Note
+
+For the MVP, the biggest mistake would be this:
+
+Treating the bot's snapshot JSON archive alone as the dataset.
+
+That is insufficient because:
+
+- there are no rejected candidates
+- there is no lifecycle state
+- evidence of reference synchronization is weak
+- resolution metadata is missing
+- ETL reproducibility is low
+
+The correct MVP is:
+
+- raw DB writes
 - audit
-- sonra ETL
+- then ETL
 
 ---
 
-**Durum:** Implementation spec hazir
-**Bagli plan:** [Backtest_Data_Collection_Plan.md](Backtest_Data_Collection_Plan.md)
-**Son guncelleme:** 2026-03-14
+**Status:** Implementation spec ready
+**Related plan:** [Backtest_Data_Collection_Plan.md](Backtest_Data_Collection_Plan.md)
+**Last updated:** 2026-03-14
