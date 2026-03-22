@@ -21,6 +21,7 @@ __pycache__/
 *.cer
 runtime/
 state/
+logs/automation/
 *.db
 *.db-shm
 *.db-wal
