@@ -33,6 +33,117 @@ def parse_meta_json(raw_value: Any) -> dict[str, Any]:
     return {}
 
 
+def _normalize_scanner_reason_tag(raw_reason: Any) -> str | None:
+    if raw_reason in (None, ""):
+        return None
+    text = str(raw_reason).strip()
+    if not text:
+        return None
+    token = text.split()[0].strip().lower()
+    if token == "ok":
+        return None
+    return token or None
+
+
+def _scanner_reject_tags(reason: Any, meta_json: dict[str, Any]) -> list[str]:
+    tags: list[str] = []
+    reject_detail = meta_json.get("reject_detail")
+    if isinstance(reject_detail, dict):
+        for side in ("yes_reason", "no_reason"):
+            normalized = _normalize_scanner_reason_tag(reject_detail.get(side))
+            if normalized:
+                side_label = "yes" if side.startswith("yes") else "no"
+                tags.append(f"{side_label}.{normalized}")
+    elif isinstance(reject_detail, str):
+        normalized = _normalize_scanner_reason_tag(reject_detail)
+        if normalized:
+            tags.append(f"cross.{normalized}")
+
+    normalized_reason = _normalize_scanner_reason_tag(reason)
+    if normalized_reason:
+        tags.append(normalized_reason)
+
+    deduped: list[str] = []
+    for tag in tags:
+        if tag not in deduped:
+            deduped.append(tag)
+    return deduped
+
+
+def scanner_recent_activity_summary(
+    conn: sqlite3.Connection,
+    *,
+    now_ts: int,
+    recent_window_sec: int,
+) -> dict[str, Any]:
+    recent_window_sec = max(60, int(recent_window_sec))
+    min_event_ts = max(0, int(now_ts) - recent_window_sec)
+    rows = conn.execute(
+        """
+        SELECT event_ts, event_type, reason, meta_json
+        FROM btc5m_lifecycle_events
+        WHERE event_ts >= ?
+          AND event_type IN ('REJECTED', 'WARMUP', 'PUBLISHED')
+        ORDER BY event_ts DESC, event_id DESC
+        """,
+        (min_event_ts,),
+    ).fetchall()
+
+    event_counts = {
+        "PUBLISHED": 0,
+        "WARMUP": 0,
+        "REJECTED": 0,
+    }
+    reject_reason_counts: dict[str, int] = {}
+    last_event_ts = None
+    last_event_type = None
+    last_event_reason = None
+
+    for row in rows:
+        event_type = str(row["event_type"] or "").upper()
+        if event_type not in event_counts:
+            continue
+        event_counts[event_type] += 1
+        if last_event_ts is None:
+            last_event_ts = int(row["event_ts"])
+            last_event_type = event_type
+            last_event_reason = str(row["reason"] or "")
+        if event_type == "REJECTED":
+            meta_json = parse_meta_json(row["meta_json"])
+            for tag in _scanner_reject_tags(row["reason"], meta_json):
+                reject_reason_counts[tag] = int(reject_reason_counts.get(tag, 0)) + 1
+
+    total_events = sum(event_counts.values())
+    reject_count = int(event_counts["REJECTED"])
+    warmup_count = int(event_counts["WARMUP"])
+    published_count = int(event_counts["PUBLISHED"])
+    last_event_age_sec = None if last_event_ts is None else max(0, int(now_ts) - int(last_event_ts))
+
+    top_reject_reasons = [
+        {"reason": reason, "count": count}
+        for reason, count in sorted(
+            reject_reason_counts.items(),
+            key=lambda item: (-int(item[1]), str(item[0])),
+        )[:8]
+    ]
+
+    return {
+        "window_sec": recent_window_sec,
+        "total_events": total_events,
+        "published_count": published_count,
+        "warmup_count": warmup_count,
+        "rejected_count": reject_count,
+        "published_ratio": (published_count / total_events) if total_events else None,
+        "warmup_ratio": (warmup_count / total_events) if total_events else None,
+        "reject_ratio": (reject_count / total_events) if total_events else None,
+        "top_reject_reasons": top_reject_reasons,
+        "last_event_ts": last_event_ts,
+        "last_event_age_sec": last_event_age_sec,
+        "last_event_type": last_event_type,
+        "last_event_reason": last_event_reason,
+    }
+
+
 def latest_operational_audit_window(
     conn: sqlite3.Connection,
     *,
@@ -136,20 +247,81 @@ def collector_has_recent_error(
     now_ts: int,
     recent_window_sec: int,
 ) -> bool:
+    return bool(
+        collector_recent_error_state(
+            run_info,
+            now_ts=now_ts,
+            recent_window_sec=recent_window_sec,
+        )["active"]
+    )
+
+
+def collector_recent_error_state(
+    run_info: Optional[dict[str, Any]],
+    *,
+    now_ts: int,
+    recent_window_sec: int,
+) -> dict[str, Any]:
     if not run_info:
-        return False
+        return {
+            "active": False,
+            "count": 0,
+            "last_error_ts": None,
+            "last_error_age_sec": None,
+            "last_error_reason": None,
+            "last_error_kind": None,
+            "last_success_ts": None,
+            "consecutive_error_count": 0,
+        }
     error_count = int(run_info.get("error_count") or 0)
-    if error_count <= 0:
-        return False
     meta = parse_meta_json(run_info.get("meta_json"))
+    recent_window_sec = max(60, int(recent_window_sec))
+    last_success_ts = meta.get("last_success_ts")
     last_error_ts = meta.get("last_error_ts")
-    if last_error_ts is None:
-        return False
+    last_error_age_sec = None
     try:
-        age_sec = max(0, int(now_ts) - int(last_error_ts))
+        if last_success_ts is not None:
+            last_success_ts = int(last_success_ts)
     except Exception:
-        return False
-    return age_sec <= max(60, int(recent_window_sec))
+        last_success_ts = None
+    try:
+        if last_error_ts is not None:
+            last_error_ts = int(last_error_ts)
+            last_error_age_sec = max(0, int(now_ts) - last_error_ts)
+    except Exception:
+        last_error_ts = None
+        last_error_age_sec = None
+
+    recent_errors: list[int] = []
+    raw_recent_errors = meta.get("recent_error_timestamps")
+    if isinstance(raw_recent_errors, list):
+        for value in raw_recent_errors:
+            try:
+                ts_value = int(value)
+            except Exception:
+                continue
+            if max(0, int(now_ts) - ts_value) <= recent_window_sec:
+                recent_errors.append(ts_value)
+
+    if last_error_ts is not None and last_error_age_sec is not None and last_error_age_sec <= recent_window_sec:
+        recent_errors.append(last_error_ts)
+
+    recent_errors = sorted(set(recent_errors))
+    try:
+        consecutive_error_count = int(meta.get("consecutive_error_count") or 0)
+    except Exception:
+        consecutive_error_count = 0
+
+    return {
+        "active": bool(error_count > 0 and recent_errors),
+        "count": len(recent_errors),
+        "last_error_ts": last_error_ts,
+        "last_error_age_sec": last_error_age_sec,
+        "last_error_reason": meta.get("last_error_reason"),
+        "last_error_kind": meta.get("last_error_kind"),
+        "last_success_ts": last_success_ts,
+        "consecutive_error_count": consecutive_error_count,
+    }
 
 
 def operational_audit_is_material_failure(window: Optional[dict[str, Any]]) -> bool:

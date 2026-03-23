@@ -66,6 +66,8 @@ NETWORK_ALERT_THRESHOLD = max(3, int(os.getenv("BTC5M_REFERENCE_NETWORK_ALERT_TH
 NETWORK_ALERT_MIN_DURATION_SEC = max(10, int(os.getenv("BTC5M_REFERENCE_NETWORK_ALERT_MIN_DURATION_SEC", "15")))
 NETWORK_ALERT_RESET_SEC = max(30, int(os.getenv("BTC5M_REFERENCE_NETWORK_ALERT_RESET_SEC", "60")))
 NETWORK_ALERT_STATE_KEY = "btc5m-reference-network"
+ERROR_HISTORY_RETENTION_SEC = max(3600, int(os.getenv("BTC5M_REFERENCE_ERROR_HISTORY_SEC", "86400")))
+ERROR_HISTORY_MAX_ITEMS = max(8, int(os.getenv("BTC5M_REFERENCE_ERROR_HISTORY_MAX_ITEMS", "128")))
 
 _logger = logging.getLogger("btc5m_reference_collector")
 _logger.setLevel(logging.INFO)
@@ -98,7 +100,44 @@ def collector_config_hash() -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def update_run_metrics(conn, run_id: str, *, reference_tick_count: int, error_count: int) -> None:
+def prune_error_timestamps(values: object, *, now_ts: int) -> list[int]:
+    cutoff_ts = max(0, int(now_ts) - ERROR_HISTORY_RETENTION_SEC)
+    normalized: list[int] = []
+    if isinstance(values, list):
+        for value in values:
+            try:
+                ts_value = int(value)
+            except Exception:
+                continue
+            if ts_value >= cutoff_ts:
+                normalized.append(ts_value)
+    return normalized[-ERROR_HISTORY_MAX_ITEMS:]
+
+
+def build_run_meta() -> dict[str, object]:
+    return {
+        "symbol": SYMBOL,
+        "source_name": SOURCE_NAME,
+        "base_url": BASE_URL,
+        "log_path": str(LOG_PATH),
+        "db_path": str(resolve_db_path()),
+        "last_success_ts": None,
+        "last_error_ts": None,
+        "last_error_reason": None,
+        "last_error_kind": None,
+        "recent_error_timestamps": [],
+        "consecutive_error_count": 0,
+    }
+
+
+def update_run_metrics(
+    conn,
+    run_id: str,
+    *,
+    reference_tick_count: int,
+    error_count: int,
+    meta_json: dict[str, object],
+) -> None:
     update_collector_run(
         conn,
         run_id,
@@ -106,6 +145,7 @@ def update_run_metrics(conn, run_id: str, *, reference_tick_count: int, error_co
             "reference_tick_count": reference_tick_count,
             "error_count": error_count,
             "status": "RUNNING",
+            "meta_json": meta_json,
         },
     )
 
@@ -132,18 +172,13 @@ def main() -> None:
 
     session = build_reference_session()
     conn = connect_db()
+    run_meta = build_run_meta()
     run_id = start_collector_run(
         conn,
         collector_name=COLLECTOR_NAME,
         collector_version=COLLECTOR_VERSION,
         config_hash=collector_config_hash(),
-        meta_json={
-            "symbol": SYMBOL,
-            "source_name": SOURCE_NAME,
-            "base_url": BASE_URL,
-            "log_path": str(LOG_PATH),
-            "db_path": str(resolve_db_path()),
-        },
+        meta_json=run_meta,
     )
 
     tick_count = 0
@@ -171,7 +206,20 @@ def main() -> None:
                 tick_count += inserted
                 clear_network_alert_state(NETWORK_ALERT_STATE_KEY)
                 maybe_insert_completed_candle(conn, aggregator, tick_row)
-                update_run_metrics(conn, run_id, reference_tick_count=tick_count, error_count=error_count)
+                tick_ts = int(tick_row.get("ts_utc") or time.time())
+                run_meta["last_success_ts"] = tick_ts
+                run_meta["consecutive_error_count"] = 0
+                run_meta["recent_error_timestamps"] = prune_error_timestamps(
+                    run_meta.get("recent_error_timestamps"),
+                    now_ts=tick_ts,
+                )
+                update_run_metrics(
+                    conn,
+                    run_id,
+                    reference_tick_count=tick_count,
+                    error_count=error_count,
+                    meta_json=run_meta,
+                )
                 log(
                     "TICK | ts=%s | price=%.2f | bid=%s | ask=%s | latency=%sms"
                     % (
@@ -191,7 +239,24 @@ def main() -> None:
                 raise SystemExit(0)
             except ReferenceFeedError as exc:
                 error_count += 1
-                update_run_metrics(conn, run_id, reference_tick_count=tick_count, error_count=error_count)
+                error_ts = int(time.time())
+                recent_errors = prune_error_timestamps(
+                    run_meta.get("recent_error_timestamps"),
+                    now_ts=error_ts,
+                )
+                recent_errors.append(error_ts)
+                run_meta["last_error_ts"] = error_ts
+                run_meta["last_error_reason"] = str(exc)
+                run_meta["last_error_kind"] = "reference_fetch_failed"
+                run_meta["recent_error_timestamps"] = prune_error_timestamps(recent_errors, now_ts=error_ts)
+                run_meta["consecutive_error_count"] = int(run_meta.get("consecutive_error_count") or 0) + 1
+                update_run_metrics(
+                    conn,
+                    run_id,
+                    reference_tick_count=tick_count,
+                    error_count=error_count,
+                    meta_json=run_meta,
+                )
                 log(f"WARN reference_fetch_failed | reason={exc}")
                 if is_network_reason(exc):
                     state = note_network_alert_state(
@@ -220,7 +285,24 @@ def main() -> None:
                     raise SystemExit(1)
             except Exception as exc:
                 error_count += 1
-                update_run_metrics(conn, run_id, reference_tick_count=tick_count, error_count=error_count)
+                error_ts = int(time.time())
+                recent_errors = prune_error_timestamps(
+                    run_meta.get("recent_error_timestamps"),
+                    now_ts=error_ts,
+                )
+                recent_errors.append(error_ts)
+                run_meta["last_error_ts"] = error_ts
+                run_meta["last_error_reason"] = str(exc)
+                run_meta["last_error_kind"] = "runtime_error"
+                run_meta["recent_error_timestamps"] = prune_error_timestamps(recent_errors, now_ts=error_ts)
+                run_meta["consecutive_error_count"] = int(run_meta.get("consecutive_error_count") or 0) + 1
+                update_run_metrics(
+                    conn,
+                    run_id,
+                    reference_tick_count=tick_count,
+                    error_count=error_count,
+                    meta_json=run_meta,
+                )
                 log(f"Runtime Error: {exc}")
                 if args.once:
                     raise
@@ -234,13 +316,7 @@ def main() -> None:
             status=exit_status,
             reference_tick_count=tick_count,
             error_count=error_count,
-            meta_json={
-                "symbol": SYMBOL,
-                "source_name": SOURCE_NAME,
-                "base_url": BASE_URL,
-                "log_path": str(LOG_PATH),
-                "db_path": str(resolve_db_path()),
-            },
+            meta_json=run_meta,
         )
         conn.close()
 

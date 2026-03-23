@@ -32,6 +32,7 @@ from common.btc5m_dataset_db import (
     insert_snapshot,
     insert_lifecycle_event,
     resolve_db_path,
+    resolve_repo_path,
     start_collector_run,
     update_collector_run,
     upsert_market,
@@ -46,9 +47,8 @@ from common.network_diagnostics import (
     note_network_alert_state,
 )
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-WORKSPACE_DIR = os.path.dirname(APP_DIR)
-load_dotenv(os.path.join(APP_DIR, ".env"))
+SCANNER_DIR = ROOT_DIR / "polymarket_scanner"
+load_dotenv(SCANNER_DIR / ".env")
 load_dotenv()
 
 # These settings control scan cadence and validation strictness.
@@ -73,12 +73,18 @@ MAX_COMPLEMENT_GAP = float(os.getenv("BTC_5MIN_MAX_COMPLEMENT_GAP", "0.03"))
 MIN_LIQUIDITY = float(os.getenv("BTC_5MIN_MIN_LIQUIDITY", "5000"))
 NEXT_SLOT_PUBLISH_AFTER_SEC = int(os.getenv("BTC_5MIN_NEXT_SLOT_PUBLISH_AFTER_SEC", "295"))
 MIN_STABLE_PASSES = int(os.getenv("BTC_5MIN_MIN_STABLE_PASSES", "2"))
-SNAPSHOT_PATH = os.getenv(
-    "BTC_5MIN_SNAPSHOT_PATH",
-    os.path.join(WORKSPACE_DIR, "runtime", "snapshots", "btc_5min_clob_snapshot.json"),
+SNAPSHOT_PATH = resolve_repo_path(
+    os.getenv("BTC_5MIN_SNAPSHOT_PATH"),
+    default_path=ROOT_DIR / "runtime" / "snapshots" / "btc_5min_clob_snapshot.json",
 )
-LOG_PATH = os.path.join(APP_DIR, "btc_5min_clob_scanner.log")
-LOCK_FILE = os.path.join(APP_DIR, "btc_5min_clob_scanner.lock")
+LOG_PATH = resolve_repo_path(
+    os.getenv("BTC5M_SCANNER_LOG_PATH"),
+    default_path=SCANNER_DIR / "btc_5min_clob_scanner.log",
+)
+LOCK_FILE = resolve_repo_path(
+    os.getenv("BTC5M_SCANNER_LOCK_PATH"),
+    default_path=SCANNER_DIR / "btc_5min_clob_scanner.lock",
+)
 USER_AGENT = "mavi-x-btc-5min-clob-scanner/1.0"
 COLLECTOR_NAME = "btc5m-clob-scanner"
 COLLECTOR_VERSION = "2026-03-15"
@@ -154,7 +160,7 @@ def note_transport_issue(source: str, reason: str) -> None:
 
 
 def snapshot_age_seconds() -> Optional[float]:
-    path = Path(SNAPSHOT_PATH)
+    path = SNAPSHOT_PATH
     if not path.exists():
         return None
     try:
@@ -164,7 +170,7 @@ def snapshot_age_seconds() -> Optional[float]:
 
 
 def snapshot_slot_ts() -> Optional[int]:
-    path = Path(SNAPSHOT_PATH)
+    path = SNAPSHOT_PATH
     if not path.exists():
         return None
     try:
@@ -599,11 +605,11 @@ def write_snapshot(payload: dict):
     # Atomic write kullaniliyor:
     # once .tmp dosyasina yaz, sonra tek hamlede asil dosyanin yerine koy.
     # Boylece bot yarim yazilmis JSON okumaz.
-    os.makedirs(os.path.dirname(SNAPSHOT_PATH), exist_ok=True)
-    tmp_path = SNAPSHOT_PATH + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
+    SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = SNAPSHOT_PATH.with_name(f"{SNAPSHOT_PATH.name}.tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f)
-    os.replace(tmp_path, SNAPSHOT_PATH)
+    tmp_path.replace(SNAPSHOT_PATH)
 
 
 def scanner_config_hash() -> str:
@@ -622,7 +628,7 @@ def scanner_config_hash() -> str:
         "no_data_alert_after_sec": NO_DATA_ALERT_AFTER_SEC,
         "no_data_raw_idle_alert_sec": NO_DATA_RAW_IDLE_ALERT_SEC,
         "no_data_alert_cooldown_sec": NO_DATA_ALERT_COOLDOWN_SEC,
-        "snapshot_path": SNAPSHOT_PATH,
+        "snapshot_path": str(SNAPSHOT_PATH),
         "dataset_db_path": str(resolve_db_path()),
     }
     encoded = json.dumps(config, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -642,8 +648,8 @@ def init_dataset_writer():
             config_hash=scanner_config_hash(),
             meta_json={
                 "db_path": str(resolve_db_path()),
-                "log_path": LOG_PATH,
-                "snapshot_path": SNAPSHOT_PATH,
+                "log_path": str(LOG_PATH),
+                "snapshot_path": str(SNAPSHOT_PATH),
                 "source_name": "polymarket_clob",
             },
         )
@@ -679,8 +685,8 @@ def close_dataset_writer(status: str = "STOPPED"):
             error_count=_dataset_error_count,
             meta_json={
                 "db_path": str(resolve_db_path()),
-                "log_path": LOG_PATH,
-                "snapshot_path": SNAPSHOT_PATH,
+                "log_path": str(LOG_PATH),
+                "snapshot_path": str(SNAPSHOT_PATH),
             },
         )
     except Exception as exc:
@@ -1380,7 +1386,7 @@ def main():
     # Keep the scanner alive as a single instance.
     # Warn on prolonged freshness failures and log runtime errors.
     global _last_raw_activity_ts, _last_raw_activity_state, _last_raw_activity_reason
-    acquire_single_instance_lock(LOCK_FILE, process_name=COLLECTOR_NAME, on_log=log, takeover=True)
+    acquire_single_instance_lock(str(LOCK_FILE), process_name=COLLECTOR_NAME, on_log=log, takeover=True)
     init_dataset_writer()
     log("BTC 5MIN CLOB-only scanner started")
     error_count = 0

@@ -8,6 +8,7 @@ import os
 import sqlite3
 import sys
 import time
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -89,6 +90,18 @@ def collector_process_meta(lock_meta: Any) -> tuple[str | None, str | None]:
     )
 
 
+def lock_started_ts(lock_meta: Any) -> int | None:
+    if not isinstance(lock_meta, dict):
+        return None
+    started_at = lock_meta.get("started_at")
+    if not started_at:
+        return None
+    try:
+        return int(datetime.fromisoformat(str(started_at)).timestamp())
+    except Exception:
+        return None
+
+
 def latest_scalar(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> Any:
     row = conn.execute(sql, params).fetchone()
     if not row:
@@ -132,6 +145,14 @@ def first_run_started_ts(conn: sqlite3.Connection) -> int | None:
         return int(value) if value is not None else None
     except Exception:
         return None
+
+
+def active_collector_started_ts(running: bool, lock_meta: Any, db_started_ts: int | None) -> int | None:
+    if running:
+        active_started_ts = lock_started_ts(lock_meta)
+        if active_started_ts is not None:
+            return active_started_ts
+    return db_started_ts
 
 
 def build_status() -> tuple[dict[str, Any], list[str]]:
@@ -216,22 +237,35 @@ def build_status() -> tuple[dict[str, Any], list[str]]:
         latest_reference_ts = latest_scalar(conn, "SELECT MAX(ts_utc) FROM btc5m_reference_ticks")
         audit_row = latest_audit_summary(conn)
         first_started_ts = first_run_started_ts(conn)
+        scanner_started_ts = latest_collector_started_ts(conn, "btc5m-clob-scanner")
+        reference_started_ts = latest_collector_started_ts(conn, "btc5m-reference-collector")
+        resolution_started_ts = latest_collector_started_ts(conn, "btc5m-resolution-collector")
+
+        active_started_ts_candidates = [
+            active_collector_started_ts(scanner_running, status["scanner"]["lock_meta"], scanner_started_ts),
+            active_collector_started_ts(reference_running, status["reference"]["lock_meta"], reference_started_ts),
+            active_collector_started_ts(resolution_running, status["resolution"]["lock_meta"], resolution_started_ts),
+        ]
+        active_started_ts_candidates = [value for value in active_started_ts_candidates if value is not None]
+        active_started_ts = max(active_started_ts_candidates) if active_started_ts_candidates else None
 
         latest_snapshot_age = safe_age(now_ts, latest_snapshot_ts)
         latest_reference_age = safe_age(now_ts, latest_reference_ts)
         latest_audit_age = safe_age(now_ts, audit_row["audit_ts"] if audit_row else None)
-        startup_age = safe_age(now_ts, first_started_ts)
+        startup_age = safe_age(now_ts, active_started_ts)
+        historical_first_run_age = safe_age(now_ts, first_started_ts)
         startup_grace_active = startup_age is not None and startup_age < STARTUP_GRACE_SEC
 
         status["latest_snapshot_age_sec"] = latest_snapshot_age
         status["latest_reference_age_sec"] = latest_reference_age
         status["latest_audit_age_sec"] = latest_audit_age
+        status["startup_started_ts"] = active_started_ts
         status["startup_age_sec"] = startup_age
+        status["historical_first_run_started_ts"] = first_started_ts
+        status["historical_first_run_age_sec"] = historical_first_run_age
         status["startup_grace_active"] = startup_grace_active
 
         if audit_row:
-            scanner_started_ts = latest_collector_started_ts(conn, "btc5m-clob-scanner")
-            reference_started_ts = latest_collector_started_ts(conn, "btc5m-reference-collector")
             operational_cutoff_ts = max(
                 value for value in (scanner_started_ts, reference_started_ts) if value is not None
             ) if any(value is not None for value in (scanner_started_ts, reference_started_ts)) else None

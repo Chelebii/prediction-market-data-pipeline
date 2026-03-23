@@ -20,9 +20,10 @@ if str(ROOT_DIR) not in sys.path:
 from common.btc5m_dataset_db import resolve_db_path, resolve_repo_path
 from common.btc5m_ops_status import (
     classify_uptime_ratio,
-    collector_has_recent_error,
+    collector_recent_error_state,
     latest_operational_audit_window,
     operational_audit_is_material_failure,
+    scanner_recent_activity_summary,
 )
 from common.single_instance import is_lock_process_alive, read_lock_metadata
 
@@ -70,6 +71,7 @@ MAX_BACKUP_AGE_SEC = max(
 )
 OPERATIONAL_AUDIT_WINDOW_MARKETS = max(3, int(os.getenv("BTC5M_OPERATIONAL_AUDIT_WINDOW_MARKETS", "12")))
 RECENT_COLLECTOR_ERROR_WINDOW_SEC = max(60, int(os.getenv("BTC5M_SUMMARY_RECENT_COLLECTOR_ERROR_WINDOW_SEC", "900")))
+SCANNER_ACTIVITY_WINDOW_SEC = max(60, int(os.getenv("BTC5M_SUMMARY_SCANNER_ACTIVITY_WINDOW_SEC", "900")))
 
 COLLECTOR_CONFIG = {
     "scanner": {
@@ -284,6 +286,7 @@ def build_summary() -> dict[str, Any]:
         "audit": None,
         "operational_audit": None,
         "uptime": None,
+        "scanner_activity": None,
         "backup": latest_backup_info(now_ts),
         "health": read_health_status(now_ts),
         "warnings": [],
@@ -305,6 +308,16 @@ def build_summary() -> dict[str, Any]:
             "process_image_name": process_image_name,
             "process_exe_path": process_exe_path,
             "latest_run": None,
+            "recent_error": {
+                "active": False,
+                "count": 0,
+                "last_error_ts": None,
+                "last_error_age_sec": None,
+                "last_error_reason": None,
+                "last_error_kind": None,
+                "last_success_ts": None,
+                "consecutive_error_count": 0,
+            },
         }
 
     if not db_path.exists():
@@ -344,10 +357,20 @@ def build_summary() -> dict[str, Any]:
             window_markets=OPERATIONAL_AUDIT_WINDOW_MARKETS,
             min_slot_start_ts=operational_cutoff_ts,
         )
+        summary["scanner_activity"] = scanner_recent_activity_summary(
+            conn,
+            now_ts=now_ts,
+            recent_window_sec=SCANNER_ACTIVITY_WINDOW_SEC,
+        )
 
         for label, config in COLLECTOR_CONFIG.items():
             run_info = latest_collector_run(conn, config["collector_name"])
             summary["collectors"][label]["latest_run"] = run_info
+            summary["collectors"][label]["recent_error"] = collector_recent_error_state(
+                run_info,
+                now_ts=now_ts,
+                recent_window_sec=RECENT_COLLECTOR_ERROR_WINDOW_SEC,
+            )
     finally:
         conn.close()
 
@@ -387,17 +410,9 @@ def build_summary() -> dict[str, Any]:
             continue
         if not collector["running"]:
             summary["warnings"].append(f"{label}_collector_not_running")
-        run_info = collector.get("latest_run") or {}
-        if collector_has_recent_error(
-            run_info,
-            now_ts=now_ts,
-            recent_window_sec=RECENT_COLLECTOR_ERROR_WINDOW_SEC,
-        ) and (
-            (label == "scanner" and (not collector["running"] or snapshot_is_stale))
-            or (label == "reference" and (not collector["running"] or reference_is_stale))
-            or (label == "resolution" and not collector["running"])
-        ):
-            summary["warnings"].append(f"{label}_collector_errors:{int(run_info['error_count'])}")
+        recent_error = collector.get("recent_error") or {}
+        if recent_error.get("active"):
+            summary["warnings"].append(f"{label}_collector_recent_errors:{int(recent_error.get('count') or 0)}")
 
     backup = summary["backup"]
     if not backup["exists"]:
@@ -438,6 +453,7 @@ def print_text_summary(summary: dict[str, Any]) -> None:
     uptime = summary["uptime"] or {}
     aggregate_uptime = uptime.get("aggregate") or {}
     recent_uptime = uptime.get("recent") or {}
+    scanner_activity = summary.get("scanner_activity") or {}
 
     print("BTC5M Collection Summary")
     print(f"Checked: {format_ts(summary['checked_ts'])}")
@@ -449,6 +465,7 @@ def print_text_summary(summary: dict[str, Any]) -> None:
     for label in ("scanner", "reference", "resolution", "audit"):
         collector = summary["collectors"].get(label) or {}
         run_info = collector.get("latest_run") or {}
+        recent_error = collector.get("recent_error") or {}
         status = "RUNNING" if collector.get("running") else "STOPPED"
         if label == "audit" and run_info:
             status = str(run_info.get("status") or status)
@@ -456,7 +473,7 @@ def print_text_summary(summary: dict[str, Any]) -> None:
         print(
             f"- {label}: status={status} pid={collector.get('pid') or '-'} "
             f"image={image_name} last_run={format_ts(run_info.get('started_ts'))} "
-            f"errors={run_info.get('error_count') or 0}"
+            f"errors={run_info.get('error_count') or 0} recent_errors={recent_error.get('count') or 0}"
         )
 
     print("")
@@ -475,6 +492,33 @@ def print_text_summary(summary: dict[str, Any]) -> None:
         f"audit={format_age(freshness.get('audit_age_sec'))} "
         f"snapshot_file={format_age(freshness.get('snapshot_file_age_sec'))}"
     )
+
+    print("")
+    print("Scanner Activity")
+    if scanner_activity:
+        print(
+            f"- window={format_age(scanner_activity.get('window_sec'))} total={scanner_activity.get('total_events') or 0} "
+            f"published={scanner_activity.get('published_count') or 0} "
+            f"warmup={scanner_activity.get('warmup_count') or 0} "
+            f"rejected={scanner_activity.get('rejected_count') or 0} "
+            f"reject_ratio={format_ratio(scanner_activity.get('reject_ratio'))}"
+        )
+        top_reasons = scanner_activity.get("top_reject_reasons") or []
+        if top_reasons:
+            top_reason_text = ", ".join(
+                f"{item.get('reason')}={item.get('count')}"
+                for item in top_reasons[:5]
+            )
+            print(f"- top_reject_reasons={top_reason_text}")
+        else:
+            print("- top_reject_reasons=-")
+        print(
+            f"- last_event={scanner_activity.get('last_event_type') or '-'} "
+            f"age={format_age(scanner_activity.get('last_event_age_sec'))} "
+            f"reason={scanner_activity.get('last_event_reason') or '-'}"
+        )
+    else:
+        print("- no scanner activity window yet")
 
     print("")
     print("Latest Audit")

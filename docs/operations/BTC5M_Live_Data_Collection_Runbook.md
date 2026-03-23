@@ -1,6 +1,6 @@
 # BTC5M Live Data Collection Runbook
 
-Last updated: 2026-03-18
+Last updated: 2026-03-23
 
 ## Goal
 
@@ -141,6 +141,49 @@ Morning summary:
 - `scripts/btc5m_collection_summary.py`
   Shows collector status, DB counts, latest audit, latest backup, freshness, and warnings.
 
+## Monitoring Interpretation
+
+Use these fields as the primary operator signals.
+
+Health JSON:
+- `startup_age_sec`
+  - Active collector runtime age.
+  - This should track the currently running collector start time, not the oldest historical dataset run.
+- `startup_started_ts`
+  - Active startup timestamp used to compute `startup_age_sec`.
+- `historical_first_run_age_sec`
+  - Historical dataset age.
+  - This is for context only and should not be treated as restart drift.
+
+Summary JSON / text:
+- `collectors.reference.latest_run.error_count`
+  - Lifetime error count for the current long-running reference collector run.
+  - By itself this is not an active incident signal.
+- `collectors.<name>.recent_error`
+  - Active collector error signal for the recent window.
+  - Treat `recent_error.active=true` as the meaningful incident indicator.
+  - If `error_count > 0` but `recent_error.active=false`, interpret this as historical error residue on a still-healthy run.
+- `scanner_activity`
+  - Recent scanner lifecycle trend window built from `PUBLISHED`, `WARMUP`, and `REJECTED` events.
+  - Use `reject_ratio`, `warmup_ratio`, and `top_reject_reasons` to decide whether scanner quality is degrading or just showing expected gating behavior.
+
+Healthy interpretation:
+- `issues=[]` and `warnings=[]`
+- collectors running
+- snapshot/reference freshness near real time
+- `recent_error.active=false`
+- `scanner_activity.reject_ratio` stable and bounded while audit remains `PASS`
+
+Degraded interpretation:
+- freshness stale, collector not running, or audit material fail
+- `recent_error.active=true` for the relevant collector
+- `scanner_activity.top_reject_reasons` concentrates on the same validation class and reject ratio trends upward across windows
+
+Current expected scanner behavior:
+- `WARMUP` is normal when a candidate has not yet satisfied stability passes.
+- `REJECTED` with reasons like `side_snapshot_invalid`, `*.mid_deviation`, `*.price_mid_gap`, `cross.bid_ask_gap`, or `cross.mid_sum_gap` is part of quote gating.
+- Treat this as an ops issue only when the trend grows enough to impact freshness or audit quality.
+
 ## Freshness Gates
 
 Default thresholds:
@@ -206,6 +249,12 @@ JSON summary:
 python scripts\btc5m_collection_summary.py --json
 ```
 
+Health JSON:
+
+```powershell
+Get-Content runtime\monitoring\btc5m_collection_health.json
+```
+
 Manual backup:
 
 ```powershell
@@ -223,6 +272,17 @@ Ensure collector-specific executables exist:
 ```powershell
 powershell -ExecutionPolicy Bypass -File control\scripts\ensure_btc5m_process_exes.ps1
 ```
+
+## Path Policy
+
+Canonical workspace root:
+- `C:\Users\mavia\MaviProjects\prediction-market-data-pipeline`
+
+Rules:
+- Runtime paths should resolve from repo root via shared path helpers.
+- Active metadata should point at canonical `MaviProjects` paths for DB, logs, locks, and snapshots.
+- Historical `.openclaw` or `5minbots` references in rotated logs or old backup records are migration history, not active path drift.
+- If a future review shows canonical paths in current process metadata and latest backup metadata, do not treat old log lines alone as an incident.
 
 ## Restore / Recovery
 
