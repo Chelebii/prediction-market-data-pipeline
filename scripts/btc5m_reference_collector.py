@@ -25,6 +25,7 @@ from common.btc5m_dataset_db import (
     insert_reference_ohlcv,
     insert_reference_tick,
     resolve_db_path,
+    resolve_repo_path,
     start_collector_run,
     update_collector_run,
 )
@@ -59,8 +60,14 @@ TIMEOUT_SEC = max(1, int(os.getenv("BTC5M_REFERENCE_TIMEOUT_SEC", str(DEFAULT_TI
 SYMBOL = normalize_symbol(os.getenv("BTC5M_REFERENCE_SYMBOL", DEFAULT_SYMBOL))
 SOURCE_NAME = str(os.getenv("BTC5M_REFERENCE_SOURCE_NAME", DEFAULT_SOURCE_NAME)).strip() or DEFAULT_SOURCE_NAME
 BASE_URL = str(os.getenv("BTC5M_REFERENCE_BASE_URL", BINANCE_SPOT_BASE_URL)).strip() or BINANCE_SPOT_BASE_URL
-LOG_PATH = Path(os.getenv("BTC5M_REFERENCE_LOG_PATH", ROOT_DIR / "runtime" / "logs" / "btc5m_reference_collector.log"))
-LOCK_PATH = Path(os.getenv("BTC5M_REFERENCE_LOCK_PATH", ROOT_DIR / "runtime" / "locks" / "btc5m_reference_collector.lock"))
+LOG_PATH = resolve_repo_path(
+    os.getenv("BTC5M_REFERENCE_LOG_PATH"),
+    default_path=ROOT_DIR / "runtime" / "logs" / "btc5m_reference_collector.log",
+)
+LOCK_PATH = resolve_repo_path(
+    os.getenv("BTC5M_REFERENCE_LOCK_PATH"),
+    default_path=ROOT_DIR / "runtime" / "locks" / "btc5m_reference_collector.lock",
+)
 ALERT_DEDUPE_SEC = max(120, int(os.getenv("BTC5M_REFERENCE_ALERT_DEDUPE_SEC", "600")))
 NETWORK_ALERT_THRESHOLD = max(3, int(os.getenv("BTC5M_REFERENCE_NETWORK_ALERT_THRESHOLD", "3")))
 NETWORK_ALERT_MIN_DURATION_SEC = max(10, int(os.getenv("BTC5M_REFERENCE_NETWORK_ALERT_MIN_DURATION_SEC", "15")))
