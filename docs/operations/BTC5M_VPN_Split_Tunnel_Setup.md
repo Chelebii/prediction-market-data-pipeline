@@ -15,9 +15,9 @@ Add these application image names to the VPN Split Tunnel allowlist:
 - `btc5m-resolution.exe`
 
 Typical Windows install paths:
-- `%LocalAppData%\Programs\Python\Python311\btc5m-scanner.exe`
-- `%LocalAppData%\Programs\Python\Python311\btc5m-reference.exe`
-- `%LocalAppData%\Programs\Python\Python311\btc5m-resolution.exe`
+- `%LocalAppData%\Python\pythoncore-3.14-64\btc5m-scanner.exe`
+- `%LocalAppData%\Python\pythoncore-3.14-64\btc5m-reference.exe`
+- `%LocalAppData%\Python\pythoncore-3.14-64\btc5m-resolution.exe`
 
 ## Do Not Select These
 
@@ -52,6 +52,7 @@ powershell -ExecutionPolicy Bypass -File control\scripts\ensure_btc5m_process_ex
 ```
 
 The helper creates renamed Python executables. These are real process image names, not wrapper-only stubs.
+The collectors still inherit the repo's `.venv\Lib\site-packages` through `PYTHONPATH`, so split-tunnel image names stay specific without routing all Python usage on the machine.
 
 ## Start and Verify
 

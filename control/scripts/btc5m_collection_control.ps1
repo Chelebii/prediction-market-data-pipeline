@@ -12,6 +12,7 @@ Set-Location $repoRoot
 $ensureExeScript = Join-Path $repoRoot 'control\scripts\ensure_btc5m_process_exes.ps1'
 $exeMap = (& $ensureExeScript -EmitJson -Quiet | ConvertFrom-Json)
 $fallbackPythonExe = (Get-Command python).Source
+$venvSitePackages = Join-Path $repoRoot '.venv\Lib\site-packages'
 
 $collectorMap = @{
     'scanner' = @{
@@ -138,6 +139,50 @@ function Get-OrDefault {
     return $Value
 }
 
+function Set-Btc5mPythonPath {
+    $entries = @($repoRoot.Path)
+    if (Test-Path $venvSitePackages) {
+        $entries += $venvSitePackages
+    }
+
+    $currentPythonPath = [Environment]::GetEnvironmentVariable('PYTHONPATH', 'Process')
+    if ($currentPythonPath) {
+        $entries += ($currentPythonPath -split ';')
+    }
+
+    $uniqueEntries = @()
+    foreach ($entry in $entries) {
+        if (-not $entry) {
+            continue
+        }
+        try {
+            $normalized = [System.IO.Path]::GetFullPath([string]$entry)
+        } catch {
+            $normalized = [string]$entry
+        }
+        if (-not $normalized) {
+            continue
+        }
+        if ($uniqueEntries -notcontains $normalized) {
+            $uniqueEntries += $normalized
+        }
+    }
+
+    $previousValue = $currentPythonPath
+    $env:PYTHONPATH = ($uniqueEntries -join ';')
+    return $previousValue
+}
+
+function Restore-Btc5mPythonPath {
+    param($PreviousValue)
+
+    if ($null -eq $PreviousValue) {
+        Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
+        return
+    }
+    $env:PYTHONPATH = [string]$PreviousValue
+}
+
 function Start-Collector {
     param([string]$Name)
 
@@ -181,7 +226,12 @@ function Start-Collector {
     }
 
     Write-Host "Starting $Name with $($exeInfo.image_name)..." -ForegroundColor Yellow
-    Start-Process -FilePath $exeInfo.path -ArgumentList $scriptPath -WorkingDirectory $workingDir -WindowStyle Hidden
+    $previousPythonPath = Set-Btc5mPythonPath
+    try {
+        Start-Process -FilePath $exeInfo.path -ArgumentList $scriptPath -WorkingDirectory $workingDir -WindowStyle Hidden
+    } finally {
+        Restore-Btc5mPythonPath -PreviousValue $previousPythonPath
+    }
     Start-Sleep -Seconds 1
     $newLockInfo = Get-LockInfo -LockPath $lockPath
     $newExpectedImage = Get-OrDefault $newLockInfo.image_name $exeInfo.image_name

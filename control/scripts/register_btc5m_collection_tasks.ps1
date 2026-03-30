@@ -13,9 +13,11 @@ $startupTarget = Join-Path $startupDir 'start_prediction_market_data_pipeline_bt
 $healthRunner = Join-Path $repoRoot 'control\scripts\run_btc5m_healthcheck.cmd'
 $auditRunner = Join-Path $repoRoot 'control\scripts\run_btc5m_dataset_audit.cmd'
 $backupRunner = Join-Path $repoRoot 'control\scripts\run_btc5m_backup_dataset.cmd'
+$derivedEtlRunner = Join-Path $repoRoot 'control\scripts\run_btc5m_derived_etl.cmd'
 $healthHiddenRunner = Join-Path $repoRoot 'control\scripts\run_btc5m_healthcheck_hidden.vbs'
 $auditHiddenRunner = Join-Path $repoRoot 'control\scripts\run_btc5m_dataset_audit_hidden.vbs'
 $backupHiddenRunner = Join-Path $repoRoot 'control\scripts\run_btc5m_backup_dataset_hidden.vbs'
+$derivedEtlHiddenRunner = Join-Path $repoRoot 'control\scripts\run_btc5m_derived_etl_hidden.vbs'
 $wscriptExe = Join-Path $env:SystemRoot 'System32\wscript.exe'
 
 $tasks = @(
@@ -33,6 +35,11 @@ $tasks = @(
         Name = 'Prediction Market Data Pipeline BTC5M Dataset Backup'
         ScheduleArgs = @('/SC', 'HOURLY', '/MO', '6', '/ST', '00:10')
         Command = '"' + $wscriptExe + '" //B //Nologo "' + $backupHiddenRunner + '"'
+    },
+    @{
+        Name = 'Prediction Market Data Pipeline BTC5M Derived ETL'
+        ScheduleArgs = @('/SC', 'MINUTE', '/MO', '15', '/ST', '00:06')
+        Command = '"' + $wscriptExe + '" //B //Nologo "' + $derivedEtlHiddenRunner + '"'
     }
 )
 
@@ -57,7 +64,8 @@ function Get-LegacyTaskNames {
     $expectedSuffixes = @(
         'BTC5M Health Check',
         'BTC5M Dataset Audit',
-        'BTC5M Dataset Backup'
+        'BTC5M Dataset Backup',
+        'BTC5M Derived ETL'
     )
     $currentNames = @($tasks | ForEach-Object { $_.Name })
     $legacyNames = @()

@@ -115,11 +115,15 @@ def load_candidate_markets(
         clauses.append("m.market_slug = ?")
         params.append(market_slug)
     sql = (
+        "SELECT market_id, market_slug, slot_start_ts, slot_end_ts "
+        "FROM ("
         "SELECT m.market_id, m.market_slug, m.slot_start_ts, m.slot_end_ts "
         "FROM btc5m_markets m "
         f"WHERE {' AND '.join(clauses)} "
-        "ORDER BY m.slot_start_ts ASC "
+        "ORDER BY m.slot_start_ts DESC "
         "LIMIT ?"
+        ") recent_markets "
+        "ORDER BY slot_start_ts ASC"
     )
     params.append(max(1, max_markets))
     return list(conn.execute(sql, params).fetchall())

@@ -4,7 +4,6 @@ Set fso = CreateObject("Scripting.FileSystemObject")
 scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
 controlDir = fso.GetParentFolderName(scriptDir)
 repoRoot = fso.GetParentFolderName(controlDir)
-ensureScript = repoRoot & "\control\scripts\ensure_btc5m_process_exes.ps1"
 sitePackages = repoRoot & "\.venv\Lib\site-packages"
 existingPythonPath = shell.Environment("PROCESS").Item("PYTHONPATH")
 If Len(existingPythonPath) > 0 Then
@@ -13,22 +12,7 @@ Else
     shell.Environment("PROCESS").Item("PYTHONPATH") = repoRoot & ";" & sitePackages
 End If
 
-processExe = shell.ExpandEnvironmentStrings("%BTC5M_BACKUP_EXE_PATH%")
-If processExe = "%BTC5M_BACKUP_EXE_PATH%" Then
-    processExe = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\Python\pythoncore-3.14-64\btc5m-backup-dataset.exe"
-End If
-If Not fso.FileExists(processExe) Then
-    shell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -File """ & ensureScript & """ -Quiet", 0, True
-End If
-If Not fso.FileExists(processExe) Then
-    processExe = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\Programs\Python\Python314\btc5m-backup-dataset.exe"
-End If
-If Not fso.FileExists(processExe) Then
-    processExe = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\Programs\Python\Python311\btc5m-backup-dataset.exe"
-End If
-If Not fso.FileExists(processExe) Then
-    processExe = repoRoot & "\.venv\Scripts\python.exe"
-End If
+processExe = repoRoot & "\.venv\Scripts\python.exe"
 If Not fso.FileExists(processExe) Then
     processExe = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\Python\pythoncore-3.14-64\python.exe"
 End If
@@ -43,6 +27,18 @@ If Not fso.FileExists(processExe) Then
 End If
 
 shell.CurrentDirectory = repoRoot
-command = """" & processExe & """ ""scripts\btc5m_backup_dataset.py"""
+command = """" & processExe & """ ""scripts\btc5m_build_features.py"" --lookback-hours 24 --max-markets 500"
+exitCode = shell.Run(command, 0, True)
+If exitCode <> 0 Then
+    WScript.Quit exitCode
+End If
+
+command = """" & processExe & """ ""scripts\btc5m_build_labels.py"" --lookback-hours 24 --max-markets 500"
+exitCode = shell.Run(command, 0, True)
+If exitCode <> 0 Then
+    WScript.Quit exitCode
+End If
+
+command = """" & processExe & """ ""scripts\btc5m_build_decision_dataset.py"" --lookback-hours 24 --max-markets 500"
 exitCode = shell.Run(command, 0, True)
 WScript.Quit exitCode

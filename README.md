@@ -177,6 +177,12 @@ Expected process names:
 - `btc5m-reference.exe`
 - `btc5m-resolution.exe`
 
+Default Windows paths live under this repo's virtualenv:
+
+- `%LocalAppData%\Python\pythoncore-3.14-64\btc5m-scanner.exe`
+- `%LocalAppData%\Python\pythoncore-3.14-64\btc5m-reference.exe`
+- `%LocalAppData%\Python\pythoncore-3.14-64\btc5m-resolution.exe`
+
 ### 8. Start live data collection
 
 ```powershell

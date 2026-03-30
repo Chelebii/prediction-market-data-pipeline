@@ -30,9 +30,9 @@ Expected process image names:
 - `btc5m-resolution.exe`
 
 Typical Windows install paths:
-- `%LocalAppData%\Programs\Python\Python311\btc5m-scanner.exe`
-- `%LocalAppData%\Programs\Python\Python311\btc5m-reference.exe`
-- `%LocalAppData%\Programs\Python\Python311\btc5m-resolution.exe`
+- `%LocalAppData%\Python\pythoncore-3.14-64\btc5m-scanner.exe`
+- `%LocalAppData%\Python\pythoncore-3.14-64\btc5m-reference.exe`
+- `%LocalAppData%\Python\pythoncore-3.14-64\btc5m-resolution.exe`
 
 Collector purpose:
 - `btc5m-scanner.exe`
@@ -50,6 +50,8 @@ The process image names are created by:
 
 Notes:
 - These are renamed Python interpreter executables, not wrapper-only launchers.
+- By default they are created next to the real CPython binary, so the running collectors keep a real `btc5m-*.exe` process image instead of redirecting through `python.exe`.
+- The launch scripts prepend `repo_root` and `.venv\Lib\site-packages` to `PYTHONPATH`, so collector dependencies still come from the repo environment.
 - Command lines still include the `.py` script path for debugging.
 - If the renamed executables are missing, the control script can fall back to plain `python.exe`, but Split Tunnel selection should use the renamed executables.
 
@@ -70,6 +72,11 @@ Task Scheduler registration:
     - `control/scripts/run_btc5m_dataset_audit_hidden.vbs`
     - `control/scripts/run_btc5m_backup_dataset_hidden.vbs`
 
+Periodic task process image names:
+- `btc5m-healthcheck.exe`
+- `btc5m-dataset-audit.exe`
+- `btc5m-backup-dataset.exe`
+
 ## Startup + Task Scheduler Layout
 
 - `control/scripts/start_btc5m_collectors.cmd`
@@ -84,7 +91,7 @@ Task Scheduler registration:
 Important:
 - Periodic tasks use wrapper `.cmd` files that first `cd` into the repo root.
 - Python scripts also normalize relative env paths against repo root, so they no longer depend on Task Scheduler working directory.
-- Task Scheduler periodic jobs run through `wscript.exe` plus a hidden `.vbs` wrapper so they do not flash a console window.
+- Task Scheduler periodic jobs run through `wscript.exe` plus a hidden `.vbs` wrapper so they do not flash a console window, but the actual Python worker now runs under a BTC5M-specific `.exe` image instead of generic `python.exe`.
 - The only visible startup console should be `control/scripts/btc5m_console_monitor.ps1`.
 - The monitor updates the window title with status and only prints to stdout on state changes or operator-relevant problems.
 
@@ -100,11 +107,15 @@ Do not select these for Split Tunnel:
 - `powershell.exe`
 - `wscript.exe`
 - `cmd.exe`
+- `btc5m-healthcheck.exe`
+- `btc5m-dataset-audit.exe`
+- `btc5m-backup-dataset.exe`
 
 Reason:
 - `python.exe` is too broad and can affect unrelated Python tools on the machine.
 - `powershell.exe`, `wscript.exe`, and `cmd.exe` are only orchestration wrappers.
-- The collector processes that generate the actual network traffic run as `btc5m-*.exe`.
+- The collector processes that generate the actual Polymarket-facing network traffic run as `btc5m-scanner.exe`, `btc5m-reference.exe`, and `btc5m-resolution.exe`.
+- Periodic maintenance jobs have their own names for process hygiene, but they are not the intended VPN-routed apps.
 
 Recommended operator flow:
 1. Register/start the BTC5M collection stack normally.
@@ -276,11 +287,11 @@ powershell -ExecutionPolicy Bypass -File control\scripts\ensure_btc5m_process_ex
 ## Path Policy
 
 Canonical workspace root:
-- `C:\Users\mavia\MaviProjects\prediction-market-data-pipeline`
+- the operator-selected repo root (for example `%USERPROFILE%\Projects\prediction-market-data-pipeline`)
 
 Rules:
 - Runtime paths should resolve from repo root via shared path helpers.
-- Active metadata should point at canonical `MaviProjects` paths for DB, logs, locks, and snapshots.
+- Active metadata should point at the operator's canonical repo-root-based paths for DB, logs, locks, and snapshots.
 - Historical `.openclaw` or `5minbots` references in rotated logs or old backup records are migration history, not active path drift.
 - If a future review shows canonical paths in current process metadata and latest backup metadata, do not treat old log lines alone as an incident.
 
