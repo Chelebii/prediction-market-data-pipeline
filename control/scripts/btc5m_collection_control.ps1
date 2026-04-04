@@ -11,7 +11,20 @@ Set-Location $repoRoot
 
 $ensureExeScript = Join-Path $repoRoot 'control\scripts\ensure_btc5m_process_exes.ps1'
 $exeMap = (& $ensureExeScript -EmitJson -Quiet | ConvertFrom-Json)
-$fallbackPythonExe = (Get-Command python).Source
+$fallbackPythonExe = $null
+$_knownPath = Join-Path $env:LOCALAPPDATA 'Python\bin\python.exe'
+if (Test-Path $_knownPath) {
+    $fallbackPythonExe = $_knownPath
+} else {
+    $_candidates = @(Get-Command python -All -ErrorAction SilentlyContinue |
+        Where-Object { $_.Source -notlike '*\WindowsApps\*' })
+    if ($_candidates.Count -gt 0) {
+        $fallbackPythonExe = $_candidates[0].Source
+    }
+}
+if (-not $fallbackPythonExe) {
+    $fallbackPythonExe = 'python'
+}
 $venvSitePackages = Join-Path $repoRoot '.venv\Lib\site-packages'
 
 $collectorMap = @{

@@ -1,10 +1,14 @@
 import atexit
+import ctypes
 import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
+
+from ctypes import wintypes
 
 
 def _normalize_windows_path(value: str | None) -> str | None:
@@ -77,50 +81,106 @@ def read_lock_metadata(lock_path: str) -> dict | None:
 
 
 def _query_windows_process(pid: int) -> dict | None:
+    native = _query_windows_process_native(pid)
+    if native and native.get("image_name"):
+        return native
+
+    shell_info = _query_windows_process_shell(pid)
+    if not shell_info:
+        return native
+    if native:
+        if not native.get("image_name"):
+            native["image_name"] = shell_info.get("image_name")
+        if not native.get("exe_path"):
+            native["exe_path"] = shell_info.get("exe_path")
+        return native
+    return shell_info
+
+
+def _query_windows_process_native(pid: int) -> dict | None:
+    if pid <= 0 or os.name != "nt":
+        return None
+    kernel32 = ctypes.windll.kernel32
+    process_handle = None
+    access_flags = (0x1000, 0x0400)  # PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_QUERY_INFORMATION
+    for access in access_flags:
+        process_handle = kernel32.OpenProcess(access, False, int(pid))
+        if process_handle:
+            break
+    if not process_handle:
+        return None
+
     try:
-        r = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        out = (r.stdout or "").strip()
-        if not out or "No tasks are running" in out:
+        exit_code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(process_handle, ctypes.byref(exit_code)):
             return None
-        first_line = out.splitlines()[0].strip().strip('"')
-        cols = [c.strip().strip('"') for c in first_line.split('","')]
-        if len(cols) < 2:
-            return None
-        image_name, pid_col = cols[0].lower(), cols[1]
-        if pid_col != str(pid):
+        if exit_code.value != 259:  # STILL_ACTIVE
             return None
 
-        proc = {"pid": int(pid_col), "image_name": image_name, "exe_path": None}
+        buf_size = wintypes.DWORD(32768)
+        exe_buffer = ctypes.create_unicode_buffer(buf_size.value)
+        exe_path = None
+        if kernel32.QueryFullProcessImageNameW(process_handle, 0, exe_buffer, ctypes.byref(buf_size)):
+            exe_path = _normalize_windows_path(exe_buffer.value)
+        image_name = Path(exe_path).name.lower() if exe_path else None
+        return {"pid": int(pid), "image_name": image_name, "exe_path": exe_path}
+    except Exception:
+        return None
+    finally:
+        if process_handle:
+            kernel32.CloseHandle(process_handle)
+
+
+def _query_windows_process_shell(pid: int) -> dict | None:
+    for _ in range(3):
         try:
-            wmi = subprocess.run(
-                [
-                    "wmic",
-                    "process",
-                    "where",
-                    f"processid={pid}",
-                    "get",
-                    "ExecutablePath",
-                    "/value",
-                ],
+            r = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
-            for line in (wmi.stdout or "").splitlines():
-                line = line.strip()
-                if line.lower().startswith("executablepath="):
-                    proc["exe_path"] = _normalize_windows_path(line.split("=", 1)[1].strip())
-                    break
+            out = (r.stdout or "").strip()
+            if not out or "No tasks are running" in out:
+                time.sleep(0.1)
+                continue
+            first_line = out.splitlines()[0].strip().strip('"')
+            cols = [c.strip().strip('"') for c in first_line.split('","')]
+            if len(cols) < 2:
+                time.sleep(0.1)
+                continue
+            image_name, pid_col = cols[0].lower(), cols[1]
+            if pid_col != str(pid):
+                time.sleep(0.1)
+                continue
+
+            proc = {"pid": int(pid_col), "image_name": image_name, "exe_path": None}
+            try:
+                wmi = subprocess.run(
+                    [
+                        "wmic",
+                        "process",
+                        "where",
+                        f"processid={pid}",
+                        "get",
+                        "ExecutablePath",
+                        "/value",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                for line in (wmi.stdout or "").splitlines():
+                    line = line.strip()
+                    if line.lower().startswith("executablepath="):
+                        proc["exe_path"] = _normalize_windows_path(line.split("=", 1)[1].strip())
+                        break
+            except Exception:
+                pass
+            return proc
         except Exception:
-            pass
-        return proc
-    except Exception:
-        return None
+            time.sleep(0.1)
+    return None
 
 
 def _is_pid_alive(pid: int, expected_image_name: str | None = None, expected_exe_path: str | None = None) -> bool:

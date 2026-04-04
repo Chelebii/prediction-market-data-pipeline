@@ -210,6 +210,17 @@ def update_run_metrics(conn: sqlite3.Connection, run_id: str, stats: dict[str, i
     )
 
 
+def safe_update_run_metrics(conn: sqlite3.Connection, run_id: str, stats: dict[str, int]) -> None:
+    try:
+        update_run_metrics(conn, run_id, stats)
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log(f"WARN run_metrics_update_failed | reason={exc}")
+
+
 def process_market(
     conn: sqlite3.Connection,
     session,
@@ -306,77 +317,102 @@ def main() -> None:
     try:
         while True:
             loop_started_at = time.perf_counter()
-            now_ts = int(time.time())
-            candidates = load_candidate_markets(
-                conn,
-                now_ts=now_ts,
-                lookback_hours=args.lookback_hours,
-                max_markets=args.max_markets,
-                market_slug=str(args.market_slug or "").strip(),
-            )
+            try:
+                now_ts = int(time.time())
+                candidates = load_candidate_markets(
+                    conn,
+                    now_ts=now_ts,
+                    lookback_hours=args.lookback_hours,
+                    max_markets=args.max_markets,
+                    market_slug=str(args.market_slug or "").strip(),
+                )
 
-            if not candidates:
-                log("No due markets found for resolution sweep.")
-            for market_row in candidates:
-                try:
-                    status, quality_flag = process_market(conn, session, market_row, now_ts=now_ts)
-                    stats["processed_count"] += 1
-                    clear_network_alert_state(NETWORK_ALERT_STATE_KEY)
-                    if status == "RESOLVED":
-                        stats["resolved_count"] += 1
-                    elif status == "PENDING_SETTLEMENT":
-                        stats["pending_count"] += 1
-                    elif status == "CANCELLED":
-                        stats["cancelled_count"] += 1
-                    else:
-                        stats["active_count"] += 1
-                    if quality_flag == "MARKET_ID_MISMATCH":
-                        stats["mismatch_count"] += 1
-                    update_run_metrics(conn, run_id, stats)
-                except KeyboardInterrupt:
-                    exit_status = "STOPPED"
-                    raise SystemExit(0)
-                except ResolutionFeedError as exc:
-                    stats["error_count"] += 1
-                    stats["last_error_ts"] = int(time.time())
-                    stats["last_error_reason"] = str(exc)
-                    update_run_metrics(conn, run_id, stats)
-                    log(f"WARN resolution_fetch_failed | slug={market_row['market_slug']} | reason={exc}")
-                    if is_network_reason(exc):
-                        state = note_network_alert_state(
-                            NETWORK_ALERT_STATE_KEY,
-                            str(exc),
-                            source=SOURCE_NAME,
-                            threshold_count=NETWORK_ALERT_THRESHOLD,
-                            min_duration_sec=NETWORK_ALERT_MIN_DURATION_SEC,
-                            reset_after_sec=NETWORK_ALERT_RESET_SEC,
-                        )
-                        if state["should_alert"]:
-                            send_alert(
-                                bot_label="BTC5M-RES",
-                                msg=build_network_intervention_message(
-                                    "Resolution collector",
-                                    state["reason"],
-                                    source=str(state["source"] or SOURCE_NAME),
-                                    failure_count=int(state["count"]),
-                                    duration_sec=int(state["duration_sec"]),
-                                    extra=f"slug={market_row['market_slug']}",
-                                ),
-                                level="WARN",
-                                dedupe_seconds=ALERT_DEDUPE_SEC,
+                if not candidates:
+                    log("No due markets found for resolution sweep.")
+                for market_row in candidates:
+                    try:
+                        status, quality_flag = process_market(conn, session, market_row, now_ts=now_ts)
+                        stats["processed_count"] += 1
+                        clear_network_alert_state(NETWORK_ALERT_STATE_KEY)
+                        if status == "RESOLVED":
+                            stats["resolved_count"] += 1
+                        elif status == "PENDING_SETTLEMENT":
+                            stats["pending_count"] += 1
+                        elif status == "CANCELLED":
+                            stats["cancelled_count"] += 1
+                        else:
+                            stats["active_count"] += 1
+                        if quality_flag == "MARKET_ID_MISMATCH":
+                            stats["mismatch_count"] += 1
+                        safe_update_run_metrics(conn, run_id, stats)
+                    except KeyboardInterrupt:
+                        exit_status = "STOPPED"
+                        raise SystemExit(0)
+                    except ResolutionFeedError as exc:
+                        try:
+                            conn.rollback()
+                        except Exception:
+                            pass
+                        stats["error_count"] += 1
+                        stats["last_error_ts"] = int(time.time())
+                        stats["last_error_reason"] = str(exc)
+                        safe_update_run_metrics(conn, run_id, stats)
+                        log(f"WARN resolution_fetch_failed | slug={market_row['market_slug']} | reason={exc}")
+                        if is_network_reason(exc):
+                            state = note_network_alert_state(
+                                NETWORK_ALERT_STATE_KEY,
+                                str(exc),
+                                source=SOURCE_NAME,
+                                threshold_count=NETWORK_ALERT_THRESHOLD,
+                                min_duration_sec=NETWORK_ALERT_MIN_DURATION_SEC,
+                                reset_after_sec=NETWORK_ALERT_RESET_SEC,
                             )
-                    if args.once:
-                        exit_status = "FAILED"
-                        raise SystemExit(1)
-                except Exception as exc:
-                    stats["error_count"] += 1
-                    stats["last_error_ts"] = int(time.time())
-                    stats["last_error_reason"] = str(exc)
-                    update_run_metrics(conn, run_id, stats)
-                    log(f"Runtime Error | slug={market_row['market_slug']} | reason={exc}")
-                    if args.once:
-                        exit_status = "FAILED"
-                        raise
+                            if state["should_alert"]:
+                                send_alert(
+                                    bot_label="BTC5M-RES",
+                                    msg=build_network_intervention_message(
+                                        "Resolution collector",
+                                        state["reason"],
+                                        source=str(state["source"] or SOURCE_NAME),
+                                        failure_count=int(state["count"]),
+                                        duration_sec=int(state["duration_sec"]),
+                                        extra=f"slug={market_row['market_slug']}",
+                                    ),
+                                    level="WARN",
+                                    dedupe_seconds=ALERT_DEDUPE_SEC,
+                                )
+                        if args.once:
+                            exit_status = "FAILED"
+                            raise SystemExit(1)
+                    except Exception as exc:
+                        try:
+                            conn.rollback()
+                        except Exception:
+                            pass
+                        stats["error_count"] += 1
+                        stats["last_error_ts"] = int(time.time())
+                        stats["last_error_reason"] = str(exc)
+                        safe_update_run_metrics(conn, run_id, stats)
+                        log(f"Runtime Error | slug={market_row['market_slug']} | reason={exc}")
+                        if args.once:
+                            exit_status = "FAILED"
+                            raise
+            except KeyboardInterrupt:
+                exit_status = "STOPPED"
+                raise SystemExit(0)
+            except Exception as exc:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                stats["error_count"] += 1
+                stats["last_error_ts"] = int(time.time())
+                stats["last_error_reason"] = str(exc)
+                safe_update_run_metrics(conn, run_id, stats)
+                log(f"Runtime Error | reason={exc}")
+                if args.once:
+                    exit_status = "FAILED"
+                    raise
 
             if args.once:
                 exit_status = "COMPLETED"

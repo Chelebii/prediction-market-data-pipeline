@@ -9,7 +9,20 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $scriptDir '..\..')
 Set-Location $repoRoot
 
-$pythonExe = (Get-Command python -ErrorAction Stop).Source
+$pythonExe = $null
+$knownPythonPath = Join-Path $env:LOCALAPPDATA 'Python\bin\python.exe'
+if (Test-Path $knownPythonPath) {
+    $pythonExe = $knownPythonPath
+} else {
+    $candidates = @(Get-Command python -All -ErrorAction SilentlyContinue |
+        Where-Object { $_.Source -notlike '*\WindowsApps\*' })
+    if ($candidates.Count -gt 0) {
+        $pythonExe = $candidates[0].Source
+    }
+}
+if (-not $pythonExe) {
+    throw "Python could not be found. Ensure Python is installed and its path is in the system PATH (not via Windows Store alias)."
+}
 $summaryScript = Join-Path $repoRoot 'scripts\btc5m_collection_summary.py'
 $controlScript = Join-Path $repoRoot 'control\scripts\btc5m_collection_control.ps1'
 $monitorLockPath = Join-Path $repoRoot 'runtime\locks\btc5m_console_monitor.lock'

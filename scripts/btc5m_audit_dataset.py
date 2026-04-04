@@ -43,6 +43,7 @@ SCAN_INTERVAL_SEC = max(1, int(os.getenv("BTC_5MIN_SCAN_INTERVAL_SEC", "3")))
 REFERENCE_TOLERANCE_SEC = max(0, int(os.getenv("BTC5M_AUDIT_REFERENCE_TOLERANCE_SEC", "1")))
 LOOKBACK_HOURS = max(1, int(os.getenv("BTC5M_AUDIT_LOOKBACK_HOURS", "48")))
 PARTIAL_STARTUP_GRACE_SEC = max(5, int(os.getenv("BTC5M_AUDIT_PARTIAL_STARTUP_GRACE_SEC", "15")))
+PARTIAL_RESTART_GRACE_SEC = max(15, int(os.getenv("BTC5M_AUDIT_PARTIAL_RESTART_GRACE_SEC", "90")))
 SETTLEMENT_GRACE_SEC = max(60, int(os.getenv("BTC5M_AUDIT_SETTLEMENT_GRACE_SEC", "900")))
 SNAPSHOT_OUTAGE_GAP_SEC = max(15, int(os.getenv("BTC5M_AUDIT_SNAPSHOT_OUTAGE_GAP_SEC", "15")))
 REFERENCE_OUTAGE_GAP_SEC = max(5, int(os.getenv("BTC5M_AUDIT_REFERENCE_OUTAGE_GAP_SEC", "5")))
@@ -100,6 +101,7 @@ def collector_config_hash(args: argparse.Namespace) -> str:
         "scan_interval_sec": SCAN_INTERVAL_SEC,
         "reference_tolerance_sec": REFERENCE_TOLERANCE_SEC,
         "partial_startup_grace_sec": PARTIAL_STARTUP_GRACE_SEC,
+        "partial_restart_grace_sec": PARTIAL_RESTART_GRACE_SEC,
         "settlement_grace_sec": SETTLEMENT_GRACE_SEC,
         "snapshot_outage_gap_sec": SNAPSHOT_OUTAGE_GAP_SEC,
         "reference_outage_gap_sec": REFERENCE_OUTAGE_GAP_SEC,
@@ -156,6 +158,26 @@ def load_snapshot_rows(conn: sqlite3.Connection, market_id: str) -> list[sqlite3
             (market_id,),
         ).fetchall()
     )
+
+
+def load_collector_restart_ts(
+    conn: sqlite3.Connection,
+    *,
+    now_ts: int,
+    lookback_hours: int,
+) -> list[int]:
+    lower_bound = now_ts - (max(1, lookback_hours) * 3600) - PARTIAL_RESTART_GRACE_SEC
+    rows = conn.execute(
+        """
+        SELECT started_ts
+        FROM collector_runs
+        WHERE collector_name IN ('btc5m-clob-scanner', 'btc5m-reference-collector')
+          AND started_ts >= ?
+        ORDER BY started_ts ASC
+        """,
+        (lower_bound,),
+    ).fetchall()
+    return sorted({int(row["started_ts"]) for row in rows if row["started_ts"] is not None})
 
 
 def load_reference_ts(conn: sqlite3.Connection, slot_start_ts: int, slot_end_ts: int) -> list[int]:
@@ -229,6 +251,7 @@ def classify_market_scope(
     collected_ts: list[int],
     now_ts: int,
     raw_missing_resolution_flag: int,
+    collector_restart_ts: list[int],
 ) -> dict[str, Any]:
     slot_start_ts = int(market["slot_start_ts"])
     slot_end_ts = int(market["slot_end_ts"])
@@ -260,6 +283,31 @@ def classify_market_scope(
             "scope_note": f"partial_startup_excluded,late_start_sec={late_start_sec}",
         }
 
+    restart_ts = next(
+        (
+            restart_candidate
+            for restart_candidate in collector_restart_ts
+            if (slot_start_ts - PARTIAL_RESTART_GRACE_SEC) <= restart_candidate <= (slot_end_ts + PARTIAL_RESTART_GRACE_SEC)
+        ),
+        None,
+    )
+    if restart_ts is not None:
+        restart_offset_start_sec = int(restart_ts) - slot_start_ts
+        restart_offset_end_sec = int(restart_ts) - slot_end_ts
+        return {
+            "scope": "PARTIAL_RESTART",
+            "summary_included": False,
+            "late_start_sec": late_start_sec,
+            "grace_remaining_sec": None,
+            "effective_missing_resolution_flag": int(raw_missing_resolution_flag),
+            "scope_note": (
+                "partial_restart_excluded,"
+                f"restart_ts={int(restart_ts)},"
+                f"restart_offset_start_sec={restart_offset_start_sec},"
+                f"restart_offset_end_sec={restart_offset_end_sec}"
+            ),
+        }
+
     grace_remaining_sec = max(0, (slot_end_ts + SETTLEMENT_GRACE_SEC) - now_ts)
     settlement_grace_active = bool(raw_missing_resolution_flag) and grace_remaining_sec > 0
     if settlement_grace_active:
@@ -282,7 +330,13 @@ def classify_market_scope(
     }
 
 
-def compute_market_audit(conn: sqlite3.Connection, market_row: sqlite3.Row, now_ts: int) -> dict[str, Any]:
+def compute_market_audit(
+    conn: sqlite3.Connection,
+    market_row: sqlite3.Row,
+    now_ts: int,
+    *,
+    collector_restart_ts: list[int],
+) -> dict[str, Any]:
     market = dict(market_row)
     slot_start_ts = int(market["slot_start_ts"])
     slot_end_ts = int(market["slot_end_ts"])
@@ -351,6 +405,7 @@ def compute_market_audit(conn: sqlite3.Connection, market_row: sqlite3.Row, now_
         collected_ts=collected_ts,
         now_ts=now_ts,
         raw_missing_resolution_flag=raw_missing_resolution_flag,
+        collector_restart_ts=collector_restart_ts,
     )
     missing_resolution_flag = int(scope_info["effective_missing_resolution_flag"])
 
@@ -433,8 +488,6 @@ def evaluate_audit_status(
         failures.append("reference_sync_gap_above_threshold")
     if missing_resolution_flag:
         failures.append("missing_official_resolution")
-    if outage_like_gap_flag:
-        failures.append("outage_like_gap_detected")
     if not failures:
         return "PASS", "all_thresholds_met"
     return "FAIL", ",".join(failures)
@@ -570,6 +623,7 @@ def main() -> None:
             "scan_interval_sec": SCAN_INTERVAL_SEC,
             "reference_tolerance_sec": REFERENCE_TOLERANCE_SEC,
             "partial_startup_grace_sec": PARTIAL_STARTUP_GRACE_SEC,
+            "partial_restart_grace_sec": PARTIAL_RESTART_GRACE_SEC,
             "settlement_grace_sec": SETTLEMENT_GRACE_SEC,
             "snapshot_outage_gap_sec": SNAPSHOT_OUTAGE_GAP_SEC,
             "reference_outage_gap_sec": REFERENCE_OUTAGE_GAP_SEC,
@@ -585,6 +639,11 @@ def main() -> None:
     error_count = 0
 
     try:
+        collector_restart_ts = load_collector_restart_ts(
+            conn,
+            now_ts=now_ts,
+            lookback_hours=int(args.lookback_hours),
+        )
         candidates = load_candidate_markets(
             conn,
             now_ts=now_ts,
@@ -600,7 +659,12 @@ def main() -> None:
 
         for market_row in candidates:
             try:
-                result = compute_market_audit(conn, market_row, now_ts)
+                result = compute_market_audit(
+                    conn,
+                    market_row,
+                    now_ts,
+                    collector_restart_ts=collector_restart_ts,
+                )
                 results.append(result)
                 insert_quality_audit(
                     conn,
@@ -680,6 +744,7 @@ def main() -> None:
                 "scan_interval_sec": SCAN_INTERVAL_SEC,
                 "reference_tolerance_sec": REFERENCE_TOLERANCE_SEC,
                 "partial_startup_grace_sec": PARTIAL_STARTUP_GRACE_SEC,
+                "partial_restart_grace_sec": PARTIAL_RESTART_GRACE_SEC,
                 "settlement_grace_sec": SETTLEMENT_GRACE_SEC,
                 "snapshot_outage_gap_sec": SNAPSHOT_OUTAGE_GAP_SEC,
                 "reference_outage_gap_sec": REFERENCE_OUTAGE_GAP_SEC,

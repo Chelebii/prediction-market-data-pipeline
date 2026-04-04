@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -77,18 +78,22 @@ COLLECTOR_CONFIG = {
     "scanner": {
         "collector_name": "btc5m-clob-scanner",
         "lock_path": SCANNER_LOCK,
+        "command_fragment": "btc_5min_clob_scanner.py",
     },
     "reference": {
         "collector_name": "btc5m-reference-collector",
         "lock_path": REFERENCE_LOCK,
+        "command_fragment": "btc5m_reference_collector.py",
     },
     "resolution": {
         "collector_name": "btc5m-resolution-collector",
         "lock_path": RESOLUTION_LOCK,
+        "command_fragment": "btc5m_resolution_collector.py",
     },
     "audit": {
         "collector_name": "btc5m-dataset-audit",
         "lock_path": None,
+        "command_fragment": "btc5m_audit_dataset.py",
     },
 }
 
@@ -103,6 +108,65 @@ def process_running(lock_path: Optional[Path]) -> tuple[bool, int | None, dict |
     if lock_path is None:
         return False, None, None
     return is_lock_process_alive(str(lock_path))
+
+
+def find_running_process(
+    *,
+    command_fragment: str,
+    expected_image_name: str | None = None,
+    expected_exe_path: str | None = None,
+) -> tuple[bool, int | None, dict | None]:
+    if os.name != "nt":
+        return False, None, None
+    ignored_images = {"powershell.exe", "pwsh.exe", "cmd.exe", "wscript.exe", "cscript.exe"}
+
+    def _ps_literal(value: str) -> str:
+        return value.replace("'", "''")
+
+    filter_parts = [
+        "$_.CommandLine",
+        f"$_.CommandLine.ToLowerInvariant().Contains('{_ps_literal(command_fragment.lower())}')",
+    ]
+    if expected_image_name:
+        filter_parts.append(f"$_.Name.ToLowerInvariant() -eq '{_ps_literal(expected_image_name.lower())}'")
+    if expected_exe_path:
+        normalized_exe = str(Path(expected_exe_path).resolve()).lower()
+        filter_parts.append(
+            "(-not $_.ExecutablePath -or "
+            f"[System.IO.Path]::GetFullPath($_.ExecutablePath).ToLowerInvariant() -eq '{_ps_literal(normalized_exe)}')"
+        )
+
+    ps_script = (
+        "$proc = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | "
+        f"Where-Object {{ {' -and '.join(filter_parts)} }} | "
+        "Select-Object -First 1 ProcessId,Name,ExecutablePath; "
+        "if ($proc) { $proc | ConvertTo-Json -Compress }"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        raw = (result.stdout or "").strip()
+        if not raw:
+            return False, None, None
+        payload = json.loads(raw)
+        pid = payload.get("ProcessId")
+        if pid is None:
+            return False, None, None
+        image_name = str(payload.get("Name") or "").strip().lower() or None
+        if image_name in ignored_images:
+            return False, None, None
+        meta = {
+            "pid": int(pid),
+            "image_name": image_name,
+            "exe_path": str(payload.get("ExecutablePath") or "").strip().lower() or None,
+        }
+        return True, int(pid), meta
+    except Exception:
+        return False, None, None
 
 
 def collector_process_meta(lock_meta: Any) -> tuple[str | None, str | None]:
@@ -300,6 +364,16 @@ def build_summary() -> dict[str, Any]:
         process_image_name, process_exe_path = collector_process_meta(
             lock_meta or (read_lock_metadata(str(config["lock_path"])) if config["lock_path"] else None)
         )
+        if not running and config.get("command_fragment"):
+            running, pid, fallback_meta = find_running_process(
+                command_fragment=str(config["command_fragment"]),
+                expected_image_name=process_image_name,
+                expected_exe_path=process_exe_path,
+            )
+            if running and fallback_meta:
+                lock_meta = lock_meta or fallback_meta
+                process_image_name = fallback_meta.get("image_name") or process_image_name
+                process_exe_path = fallback_meta.get("exe_path") or process_exe_path
         summary["collectors"][label] = {
             "running": running,
             "pid": pid,

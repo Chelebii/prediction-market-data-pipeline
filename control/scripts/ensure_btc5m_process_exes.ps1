@@ -27,11 +27,18 @@ function Write-EnsureLog {
 }
 
 function Resolve-PythonCommandPath {
-    try {
-        return (Get-Command python -ErrorAction Stop).Source
-    } catch {
-        return $null
+    $knownPath = Join-Path $env:LOCALAPPDATA 'Python\bin\python.exe'
+    if (Test-Path $knownPath) {
+        return $knownPath
     }
+    try {
+        $candidates = @(Get-Command python -All -ErrorAction Stop |
+            Where-Object { $_.Source -notlike '*\WindowsApps\*' })
+        if ($candidates.Count -gt 0) {
+            return $candidates[0].Source
+        }
+    } catch {}
+    return $null
 }
 
 function Get-VenvBasePythonExe {
@@ -85,13 +92,19 @@ function Test-IsVenvRedirector {
 }
 
 function Select-BasePythonExe {
+    $resolvedPython = Resolve-PythonCommandPath
+    $sysExePath = $null
+    if ($resolvedPython -and (Test-Path $resolvedPython)) {
+        $sysExePath = (& $resolvedPython -c "import sys; print(sys.executable)" 2>$null)
+    }
     $candidates = @(
         [Environment]::GetEnvironmentVariable('BTC5M_BASE_PYTHON_EXE_PATH', 'Process'),
         [Environment]::GetEnvironmentVariable('BTC5M_BASE_PYTHON_EXE_PATH', 'User'),
         [Environment]::GetEnvironmentVariable('BTC5M_BASE_PYTHON_EXE_PATH', 'Machine'),
         (Get-VenvBasePythonExe),
-        (& python -c "import sys; print(sys.executable)" 2>$null),
-        (Resolve-PythonCommandPath),
+        $sysExePath,
+        $resolvedPython,
+        "$env:LOCALAPPDATA\Python\bin\python.exe",
         "$env:LOCALAPPDATA\Python\pythoncore-3.14-64\python.exe",
         "$env:LOCALAPPDATA\Programs\Python\Python314\python.exe",
         "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe"

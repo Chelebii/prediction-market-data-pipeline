@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sqlite3
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -77,6 +78,66 @@ def log(message: str) -> None:
 
 def process_running(lock_path: Path) -> tuple[bool, int | None, dict | None]:
     return is_lock_process_alive(str(lock_path))
+
+
+def find_running_process(
+    *,
+    command_fragment: str,
+    expected_image_name: str | None = None,
+    expected_exe_path: str | None = None,
+) -> tuple[bool, int | None, dict | None]:
+    if os.name != "nt":
+        return False, None, None
+    ignored_images = {"powershell.exe", "pwsh.exe", "cmd.exe", "wscript.exe", "cscript.exe"}
+
+    def _ps_literal(value: str) -> str:
+        return value.replace("'", "''")
+
+    filter_parts = [
+        "$_.CommandLine",
+        f"$_.CommandLine.ToLowerInvariant().Contains('{_ps_literal(command_fragment.lower())}')",
+    ]
+    if expected_image_name:
+        filter_parts.append(f"$_.Name.ToLowerInvariant() -eq '{_ps_literal(expected_image_name.lower())}'")
+    if expected_exe_path:
+        normalized_exe = str(Path(expected_exe_path).resolve()).lower()
+        filter_parts.append(
+            "(-not $_.ExecutablePath -or "
+            f"[System.IO.Path]::GetFullPath($_.ExecutablePath).ToLowerInvariant() -eq '{_ps_literal(normalized_exe)}')"
+        )
+
+    ps_script = (
+        "$proc = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | "
+        f"Where-Object {{ {' -and '.join(filter_parts)} }} | "
+        "Select-Object -First 1 ProcessId,Name,ExecutablePath; "
+        "if ($proc) { $proc | ConvertTo-Json -Compress }"
+    )
+
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        raw = (result.stdout or "").strip()
+        if not raw:
+            return False, None, None
+        payload = json.loads(raw)
+        pid = payload.get("ProcessId")
+        if pid is None:
+            return False, None, None
+        image_name = str(payload.get("Name") or "").strip().lower() or None
+        if image_name in ignored_images:
+            return False, None, None
+        meta = {
+            "pid": int(pid),
+            "image_name": image_name,
+            "exe_path": str(payload.get("ExecutablePath") or "").strip().lower() or None,
+        }
+        return True, int(pid), meta
+    except Exception:
+        return False, None, None
 
 
 def collector_process_meta(lock_meta: Any) -> tuple[str | None, str | None]:
@@ -172,6 +233,39 @@ def build_status() -> tuple[dict[str, Any], list[str]]:
     resolution_image_name, resolution_exe_path = collector_process_meta(
         resolution_lock_meta or read_lock_metadata(str(RESOLUTION_LOCK))
     )
+
+    if not scanner_running:
+        scanner_running, scanner_pid, scanner_fallback_meta = find_running_process(
+            command_fragment="btc_5min_clob_scanner.py",
+            expected_image_name=scanner_image_name,
+            expected_exe_path=scanner_exe_path,
+        )
+        if scanner_running and scanner_fallback_meta:
+            scanner_lock_meta = scanner_lock_meta or scanner_fallback_meta
+            scanner_image_name = scanner_fallback_meta.get("image_name") or scanner_image_name
+            scanner_exe_path = scanner_fallback_meta.get("exe_path") or scanner_exe_path
+
+    if not reference_running:
+        reference_running, reference_pid, reference_fallback_meta = find_running_process(
+            command_fragment="btc5m_reference_collector.py",
+            expected_image_name=reference_image_name,
+            expected_exe_path=reference_exe_path,
+        )
+        if reference_running and reference_fallback_meta:
+            reference_lock_meta = reference_lock_meta or reference_fallback_meta
+            reference_image_name = reference_fallback_meta.get("image_name") or reference_image_name
+            reference_exe_path = reference_fallback_meta.get("exe_path") or reference_exe_path
+
+    if not resolution_running:
+        resolution_running, resolution_pid, resolution_fallback_meta = find_running_process(
+            command_fragment="btc5m_resolution_collector.py",
+            expected_image_name=resolution_image_name,
+            expected_exe_path=resolution_exe_path,
+        )
+        if resolution_running and resolution_fallback_meta:
+            resolution_lock_meta = resolution_lock_meta or resolution_fallback_meta
+            resolution_image_name = resolution_fallback_meta.get("image_name") or resolution_image_name
+            resolution_exe_path = resolution_fallback_meta.get("exe_path") or resolution_exe_path
 
     snapshot_file_age = None
     if SNAPSHOT_PATH.exists():

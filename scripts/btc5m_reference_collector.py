@@ -144,7 +144,7 @@ def update_run_metrics(
     reference_tick_count: int,
     error_count: int,
     meta_json: dict[str, object],
-) -> None:
+    ) -> None:
     update_collector_run(
         conn,
         run_id,
@@ -155,6 +155,30 @@ def update_run_metrics(
             "meta_json": meta_json,
         },
     )
+
+
+def safe_update_run_metrics(
+    conn,
+    run_id: str,
+    *,
+    reference_tick_count: int,
+    error_count: int,
+    meta_json: dict[str, object],
+) -> None:
+    try:
+        update_run_metrics(
+            conn,
+            run_id,
+            reference_tick_count=reference_tick_count,
+            error_count=error_count,
+            meta_json=meta_json,
+        )
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log(f"WARN run_metrics_update_failed | reason={exc}")
 
 
 def maybe_insert_completed_candle(conn, aggregator: ReferenceOhlcvAggregator, tick_row: dict) -> int:
@@ -220,7 +244,7 @@ def main() -> None:
                     run_meta.get("recent_error_timestamps"),
                     now_ts=tick_ts,
                 )
-                update_run_metrics(
+                safe_update_run_metrics(
                     conn,
                     run_id,
                     reference_tick_count=tick_count,
@@ -247,6 +271,10 @@ def main() -> None:
             except ReferenceFeedError as exc:
                 error_count += 1
                 error_ts = int(time.time())
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 recent_errors = prune_error_timestamps(
                     run_meta.get("recent_error_timestamps"),
                     now_ts=error_ts,
@@ -257,7 +285,7 @@ def main() -> None:
                 run_meta["last_error_kind"] = "reference_fetch_failed"
                 run_meta["recent_error_timestamps"] = prune_error_timestamps(recent_errors, now_ts=error_ts)
                 run_meta["consecutive_error_count"] = int(run_meta.get("consecutive_error_count") or 0) + 1
-                update_run_metrics(
+                safe_update_run_metrics(
                     conn,
                     run_id,
                     reference_tick_count=tick_count,
@@ -293,6 +321,10 @@ def main() -> None:
             except Exception as exc:
                 error_count += 1
                 error_ts = int(time.time())
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 recent_errors = prune_error_timestamps(
                     run_meta.get("recent_error_timestamps"),
                     now_ts=error_ts,
@@ -303,7 +335,7 @@ def main() -> None:
                 run_meta["last_error_kind"] = "runtime_error"
                 run_meta["recent_error_timestamps"] = prune_error_timestamps(recent_errors, now_ts=error_ts)
                 run_meta["consecutive_error_count"] = int(run_meta.get("consecutive_error_count") or 0) + 1
-                update_run_metrics(
+                safe_update_run_metrics(
                     conn,
                     run_id,
                     reference_tick_count=tick_count,
