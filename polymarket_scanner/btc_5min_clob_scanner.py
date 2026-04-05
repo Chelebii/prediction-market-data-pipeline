@@ -1427,7 +1427,7 @@ def main():
                         and (now - last_no_data_alert_ts) >= NO_DATA_ALERT_COOLDOWN_SEC
                     ):
                         transport_hint = ""
-                        if _last_transport_issue_ts > 0 and (now - _last_transport_issue_ts) <= max(120.0, NO_DATA_ALERT_SEC):
+                        if _last_transport_issue_ts > 0 and (now - _last_transport_issue_ts) <= max(120.0, NO_DATA_ALERT_AFTER_SEC):
                             transport_hint = (
                                 f" last_transport={_last_transport_issue_source}:{_last_transport_issue_reason}"
                             )
