@@ -1,6 +1,6 @@
 # BTC5M Live Data Collection Runbook
 
-Last updated: 2026-03-23
+Last updated: 2026-04-05
 
 ## Goal
 
@@ -346,6 +346,10 @@ powershell -ExecutionPolicy Bypass -File control\scripts\btc5m_collection_contro
 ## Operational Notes
 
 - The machine must stay awake and online. If Windows sleep triggers, collectors stop.
+- Incident note, 2026-04-05:
+  - For the local window `00:00-09:00` (Europe/London), expected slot count was `108`.
+  - Only `3` slot definitions were present in the DB, so `105` slots were missing.
+  - Cause: the PC was accidentally put into sleep mode.
 - This setup is only for data collection.
 - Startup, monitor, health, and summary scripts expect collector-specific image names. If a collector is manually started with plain `python.exe`, Split Tunnel isolation becomes ambiguous and operator visibility can degrade to legacy fallback mode.
 - First success criterion is not PnL. First success criterion is:
