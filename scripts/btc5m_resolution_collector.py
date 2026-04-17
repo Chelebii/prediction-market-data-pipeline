@@ -72,6 +72,7 @@ ALERT_DEDUPE_SEC = max(120, int(os.getenv("BTC5M_RESOLUTION_ALERT_DEDUPE_SEC", "
 NETWORK_ALERT_THRESHOLD = max(2, int(os.getenv("BTC5M_RESOLUTION_NETWORK_ALERT_THRESHOLD", "2")))
 NETWORK_ALERT_MIN_DURATION_SEC = max(30, int(os.getenv("BTC5M_RESOLUTION_NETWORK_ALERT_MIN_DURATION_SEC", "45")))
 NETWORK_ALERT_RESET_SEC = max(60, int(os.getenv("BTC5M_RESOLUTION_NETWORK_ALERT_RESET_SEC", "180")))
+MARKET_NOT_FOUND_ALERT_THRESHOLD = max(2, int(os.getenv("BTC5M_RESOLUTION_MARKET_NOT_FOUND_ALERT_THRESHOLD", "5")))
 NETWORK_ALERT_STATE_KEY = "btc5m-resolution-network"
 
 _logger = logging.getLogger("btc5m_resolution_collector")
@@ -221,6 +222,12 @@ def safe_update_run_metrics(conn: sqlite3.Connection, run_id: str, stats: dict[s
         log(f"WARN run_metrics_update_failed | reason={exc}")
 
 
+def reset_market_not_found_streak(stats: dict[str, Any]) -> None:
+    stats["market_not_found_consecutive_count"] = 0
+    stats["market_not_found_last_slug"] = None
+    stats["market_not_found_alert_sent"] = False
+
+
 def process_market(
     conn: sqlite3.Connection,
     session,
@@ -306,6 +313,9 @@ def main() -> None:
         "error_count": 0,
         "last_error_ts": None,
         "last_error_reason": None,
+        "market_not_found_consecutive_count": 0,
+        "market_not_found_last_slug": None,
+        "market_not_found_alert_sent": False,
     }
     exit_status = "STOPPED"
 
@@ -334,6 +344,7 @@ def main() -> None:
                         status, quality_flag = process_market(conn, session, market_row, now_ts=now_ts)
                         stats["processed_count"] += 1
                         clear_network_alert_state(NETWORK_ALERT_STATE_KEY)
+                        reset_market_not_found_streak(stats)
                         if status == "RESOLVED":
                             stats["resolved_count"] += 1
                         elif status == "PENDING_SETTLEMENT":
@@ -358,6 +369,26 @@ def main() -> None:
                         stats["last_error_reason"] = str(exc)
                         safe_update_run_metrics(conn, run_id, stats)
                         log(f"WARN resolution_fetch_failed | slug={market_row['market_slug']} | reason={exc}")
+                        if str(exc) == "market_not_found":
+                            stats["market_not_found_consecutive_count"] += 1
+                            stats["market_not_found_last_slug"] = str(market_row["market_slug"])
+                            if (
+                                stats["market_not_found_consecutive_count"] >= MARKET_NOT_FOUND_ALERT_THRESHOLD
+                                and not stats["market_not_found_alert_sent"]
+                            ):
+                                send_alert(
+                                    bot_label="BTC5M-RES",
+                                    msg=(
+                                        "Resolution collector is repeatedly missing markets"
+                                        f" | consecutive_market_not_found={stats['market_not_found_consecutive_count']}"
+                                        f" | last_slug={stats['market_not_found_last_slug']}"
+                                    ),
+                                    level="WARN",
+                                    dedupe_seconds=ALERT_DEDUPE_SEC,
+                                )
+                                stats["market_not_found_alert_sent"] = True
+                        else:
+                            reset_market_not_found_streak(stats)
                         if is_network_reason(exc):
                             state = note_network_alert_state(
                                 NETWORK_ALERT_STATE_KEY,
@@ -392,6 +423,7 @@ def main() -> None:
                         stats["error_count"] += 1
                         stats["last_error_ts"] = int(time.time())
                         stats["last_error_reason"] = str(exc)
+                        reset_market_not_found_streak(stats)
                         safe_update_run_metrics(conn, run_id, stats)
                         log(f"Runtime Error | slug={market_row['market_slug']} | reason={exc}")
                         if args.once:
@@ -408,6 +440,7 @@ def main() -> None:
                 stats["error_count"] += 1
                 stats["last_error_ts"] = int(time.time())
                 stats["last_error_reason"] = str(exc)
+                reset_market_not_found_streak(stats)
                 safe_update_run_metrics(conn, run_id, stats)
                 log(f"Runtime Error | reason={exc}")
                 if args.once:

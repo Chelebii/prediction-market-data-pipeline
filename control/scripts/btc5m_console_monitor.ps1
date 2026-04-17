@@ -324,6 +324,26 @@ function Get-StateMessage {
     return "Attention: " + ($plainWarnings -join ' | ')
 }
 
+function Test-ScannerRawActivityFresh {
+    param($Summary)
+
+    if (-not $Summary -or -not $Summary.scanner_runtime) {
+        return $false
+    }
+
+    $runtime = $Summary.scanner_runtime
+    if ($null -eq $runtime.age_sec) {
+        return $false
+    }
+
+    $state = [string]($runtime.state)
+    if (-not $state -or $state -eq 'PARSE_FAILED') {
+        return $false
+    }
+
+    return ([int]$runtime.age_sec -le [int]$ScannerRawActivityFreshSec)
+}
+
 function Get-RecoveryPlan {
     param($Summary)
 
@@ -335,8 +355,10 @@ function Get-RecoveryPlan {
         $targetActions['scanner'] = 'start'
         $reasons.Add('scanner_not_running')
     } elseif (@($warnings | Where-Object { $_ -like 'snapshot_stale:*' }).Count -gt 0) {
-        $targetActions['scanner'] = 'restart'
-        $reasons.Add('snapshot_stale')
+        if (-not (Test-ScannerRawActivityFresh -Summary $Summary)) {
+            $targetActions['scanner'] = 'restart'
+            $reasons.Add('snapshot_stale')
+        }
     }
 
     if (-not [bool]$Summary.collectors.reference.running -or $warnings -contains 'reference_collector_not_running') {
@@ -404,6 +426,7 @@ function Get-RecoveryDescription {
 $RecoveryCooldownSec = [Math]::Max(15, $PollSec)
 $RecoveryFailClosedSec = [Math]::Max(30, $PollSec * 3)
 $RecoveryMaxAttempts = 3
+$ScannerRawActivityFreshSec = [Math]::Max(60, $PollSec * 4)
 
 if (-not $NoStart) {
     try {

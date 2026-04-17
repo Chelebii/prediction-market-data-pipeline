@@ -7,11 +7,13 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
+from urllib.parse import quote
 
 import requests
 
 GAMMA_BASE_URL = "https://gamma-api.polymarket.com"
 MARKETS_ENDPOINT = "/markets"
+MARKET_BY_SLUG_ENDPOINT = "/markets/slug/{slug}"
 DEFAULT_SOURCE_NAME = "polymarket_gamma_official"
 DEFAULT_TIMEOUT_SEC = 5
 DEFAULT_USER_AGENT = "mavi-x-btc5m-resolution-collector/1.0"
@@ -54,14 +56,14 @@ def fetch_gamma_market_by_slug(
     if not slug:
         raise ResolutionFeedError("market_slug_missing")
 
+    slug_path = quote(slug, safe="")
     last_error: Optional[str] = None
     attempts = max(1, int(retry_count) + 1)
     for attempt_idx in range(attempts):
         started_at = time.perf_counter()
         try:
             response = session.get(
-                f"{base_url.rstrip('/')}{MARKETS_ENDPOINT}",
-                params={"slug": slug},
+                f"{base_url.rstrip('/')}{MARKET_BY_SLUG_ENDPOINT.format(slug=slug_path)}",
                 timeout=timeout_sec,
             )
         except requests.RequestException as exc:
@@ -84,18 +86,34 @@ def fetch_gamma_market_by_slug(
         except Exception as exc:
             raise ResolutionFeedError(f"gamma_json_decode_failed:{exc}") from exc
 
-        if not isinstance(payload, list) or not payload:
-            raise ResolutionFeedError("market_not_found")
+        market: Optional[dict[str, Any]]
+        if isinstance(payload, dict):
+            market = payload
+        elif isinstance(payload, list) and payload:
+            first_item = payload[0]
+            market = first_item if isinstance(first_item, dict) else None
+        else:
+            market = None
 
-        market = payload[0]
-        if not isinstance(market, dict):
-            raise ResolutionFeedError("market_payload_invalid")
+        if market is None:
+            fallback = _fetch_gamma_market_by_slug_via_list(
+                session,
+                market_slug=slug,
+                base_url=base_url,
+                timeout_sec=timeout_sec,
+            )
+            if fallback is None:
+                raise ResolutionFeedError("market_not_found")
+            market = fallback
+            endpoint_used = MARKETS_ENDPOINT
+        else:
+            endpoint_used = MARKET_BY_SLUG_ENDPOINT
 
         return {
             "market": market,
             "fetch_meta": {
                 "base_url": base_url,
-                "endpoint": MARKETS_ENDPOINT,
+                "endpoint": endpoint_used,
                 "market_slug": slug,
                 "latency_ms": latency_ms,
                 "retry_count": attempt_idx,
@@ -103,6 +121,37 @@ def fetch_gamma_market_by_slug(
         }
 
     raise ResolutionFeedError(last_error or "gamma_fetch_failed")
+
+
+def _fetch_gamma_market_by_slug_via_list(
+    session: requests.Session,
+    *,
+    market_slug: str,
+    base_url: str,
+    timeout_sec: int,
+) -> Optional[dict[str, Any]]:
+    try:
+        response = session.get(
+            f"{base_url.rstrip('/')}{MARKETS_ENDPOINT}",
+            params={"slug": str(market_slug or "").strip()},
+            timeout=timeout_sec,
+        )
+    except requests.RequestException:
+        return None
+
+    if response.status_code != 200:
+        return None
+
+    try:
+        payload = response.json()
+    except Exception:
+        return None
+
+    if not isinstance(payload, list) or not payload:
+        return None
+
+    first_item = payload[0]
+    return first_item if isinstance(first_item, dict) else None
 
 
 def derive_resolution_decision(

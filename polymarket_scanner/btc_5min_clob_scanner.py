@@ -77,6 +77,10 @@ SNAPSHOT_PATH = resolve_repo_path(
     os.getenv("BTC_5MIN_SNAPSHOT_PATH"),
     default_path=ROOT_DIR / "runtime" / "snapshots" / "btc_5min_clob_snapshot.json",
 )
+SCANNER_STATUS_PATH = resolve_repo_path(
+    os.getenv("BTC5M_SCANNER_STATUS_PATH"),
+    default_path=ROOT_DIR / "runtime" / "monitoring" / "btc5m_scanner_runtime_status.json",
+)
 LOG_PATH = resolve_repo_path(
     os.getenv("BTC5M_SCANNER_LOG_PATH"),
     default_path=SCANNER_DIR / "btc_5min_clob_scanner.log",
@@ -88,6 +92,8 @@ LOCK_FILE = resolve_repo_path(
 USER_AGENT = "mavi-x-btc-5min-clob-scanner/1.0"
 COLLECTOR_NAME = "btc5m-clob-scanner"
 COLLECTOR_VERSION = "2026-03-15"
+ATOMIC_WRITE_RETRIES = max(1, int(os.getenv("BTC5M_ATOMIC_WRITE_RETRIES", "8")))
+ATOMIC_WRITE_RETRY_DELAY_SEC = max(0.01, float(os.getenv("BTC5M_ATOMIC_WRITE_RETRY_DELAY_SEC", "0.05")))
 
 session = requests.Session()
 session.headers.update({"User-Agent": USER_AGENT})
@@ -181,11 +187,53 @@ def snapshot_slot_ts() -> Optional[int]:
         return None
 
 
+def write_json_atomic(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    last_error: Optional[BaseException] = None
+    for attempt in range(1, ATOMIC_WRITE_RETRIES + 1):
+        try:
+            with tmp_path.open("w", encoding="utf-8") as f:
+                json.dump(payload, f)
+            tmp_path.replace(path)
+            return
+        except OSError as exc:
+            last_error = exc
+            if attempt >= ATOMIC_WRITE_RETRIES:
+                break
+            time.sleep(ATOMIC_WRITE_RETRY_DELAY_SEC * attempt)
+    try:
+        if tmp_path.exists():
+            tmp_path.unlink()
+    except OSError:
+        pass
+    if last_error is not None:
+        raise last_error
+
+
+def write_scanner_status(state: str, reason: str = "", extra: Optional[dict] = None) -> None:
+    payload = {
+        "ts": int(time.time()),
+        "state": str(state or "UNKNOWN"),
+        "reason": str(reason or state or "unknown"),
+        "snapshot_path": str(SNAPSHOT_PATH),
+        "run_id": _dataset_run_id,
+        "pid": os.getpid(),
+    }
+    if extra:
+        payload["extra"] = dict(extra)
+    try:
+        write_json_atomic(SCANNER_STATUS_PATH, payload)
+    except Exception as exc:
+        log(f"WARN scanner_status_write_failed | reason={exc}")
+
+
 def record_raw_activity(state: str, reason: str = "") -> None:
     global _last_raw_activity_ts, _last_raw_activity_state, _last_raw_activity_reason
     _last_raw_activity_ts = time.time()
     _last_raw_activity_state = str(state or "UNKNOWN")
     _last_raw_activity_reason = str(reason or state or "unknown")
+    write_scanner_status(_last_raw_activity_state, _last_raw_activity_reason)
 
 
 def http_get(url: str, params: dict = None, timeout: int = 5) -> Optional[requests.Response]:
@@ -602,14 +650,7 @@ def build_snapshot(market: dict, yes_data: dict, no_data: dict, reason: str) -> 
 
 
 def write_snapshot(payload: dict):
-    # Atomic write kullaniliyor:
-    # once .tmp dosyasina yaz, sonra tek hamlede asil dosyanin yerine koy.
-    # Boylece bot yarim yazilmis JSON okumaz.
-    SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = SNAPSHOT_PATH.with_name(f"{SNAPSHOT_PATH.name}.tmp")
-    with tmp_path.open("w", encoding="utf-8") as f:
-        json.dump(payload, f)
-    tmp_path.replace(SNAPSHOT_PATH)
+    write_json_atomic(SNAPSHOT_PATH, payload)
 
 
 def scanner_config_hash() -> str:
@@ -1125,6 +1166,12 @@ def scan_once() -> bool:
     if not candidates:
         _last_candidate_slug = None
         _last_candidate_passes = 0
+        current_slot = (now_ts // 300) * 300
+        reason = (
+            f"market_not_found_or_not_publishable scanned={len(markets)} "
+            f"current_slot={current_slot} next_slot={current_slot + 300}"
+        )
+        record_raw_activity("DISCOVERY_EMPTY", reason)
         log(f"SKIP market_not_found_or_not_publishable | scanned={len(markets)}")
         return False
 
@@ -1397,6 +1444,7 @@ def main():
     _last_raw_activity_ts = last_ok_ts
     _last_raw_activity_state = "STARTUP"
     _last_raw_activity_reason = "startup"
+    write_scanner_status("STARTUP", "startup")
     last_no_data_alert_ts = 0.0
     exit_status = "STOPPED"
     try:

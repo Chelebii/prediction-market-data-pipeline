@@ -43,6 +43,10 @@ SNAPSHOT_PATH = resolve_repo_path(
     os.getenv("BTC_5MIN_SNAPSHOT_PATH"),
     default_path=ROOT_DIR / "runtime" / "snapshots" / "btc_5min_clob_snapshot.json",
 )
+SCANNER_STATUS_PATH = resolve_repo_path(
+    os.getenv("BTC5M_SCANNER_STATUS_PATH"),
+    default_path=ROOT_DIR / "runtime" / "monitoring" / "btc5m_scanner_runtime_status.json",
+)
 SCANNER_LOCK = resolve_repo_path(
     ROOT_DIR / "polymarket_scanner" / "btc_5min_clob_scanner.lock",
     default_path=ROOT_DIR / "polymarket_scanner" / "btc_5min_clob_scanner.lock",
@@ -321,6 +325,43 @@ def read_health_status(now_ts: int) -> dict[str, Any]:
     }
 
 
+def read_scanner_runtime_status(now_ts: int) -> dict[str, Any]:
+    if not SCANNER_STATUS_PATH.exists():
+        return {
+            "exists": False,
+            "path": str(SCANNER_STATUS_PATH),
+            "ts": None,
+            "age_sec": None,
+            "state": None,
+            "reason": None,
+            "pid": None,
+        }
+    try:
+        payload = json.loads(SCANNER_STATUS_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {
+            "exists": True,
+            "path": str(SCANNER_STATUS_PATH),
+            "ts": None,
+            "age_sec": None,
+            "state": "PARSE_FAILED",
+            "reason": str(exc),
+            "pid": None,
+        }
+    ts = payload.get("ts")
+    return {
+        "exists": True,
+        "path": str(SCANNER_STATUS_PATH),
+        "ts": ts,
+        "age_sec": safe_age(now_ts, ts),
+        "state": payload.get("state"),
+        "reason": payload.get("reason"),
+        "pid": payload.get("pid"),
+        "run_id": payload.get("run_id"),
+        "extra": payload.get("extra") if isinstance(payload.get("extra"), dict) else {},
+    }
+
+
 def table_count(conn: sqlite3.Connection, table_name: str) -> int:
     value = latest_scalar(conn, f"SELECT COUNT(*) FROM {table_name}")
     return int(value or 0)
@@ -351,6 +392,7 @@ def build_summary() -> dict[str, Any]:
         "operational_audit": None,
         "uptime": None,
         "scanner_activity": None,
+        "scanner_runtime": read_scanner_runtime_status(now_ts),
         "backup": latest_backup_info(now_ts),
         "health": read_health_status(now_ts),
         "warnings": [],
@@ -528,6 +570,7 @@ def print_text_summary(summary: dict[str, Any]) -> None:
     aggregate_uptime = uptime.get("aggregate") or {}
     recent_uptime = uptime.get("recent") or {}
     scanner_activity = summary.get("scanner_activity") or {}
+    scanner_runtime = summary.get("scanner_runtime") or {}
 
     print("BTC5M Collection Summary")
     print(f"Checked: {format_ts(summary['checked_ts'])}")
@@ -593,6 +636,14 @@ def print_text_summary(summary: dict[str, Any]) -> None:
         )
     else:
         print("- no scanner activity window yet")
+
+    print("")
+    print("Scanner Runtime")
+    print(
+        f"- state={scanner_runtime.get('state') or '-'} "
+        f"age={format_age(scanner_runtime.get('age_sec'))} "
+        f"reason={scanner_runtime.get('reason') or '-'}"
+    )
 
     print("")
     print("Latest Audit")

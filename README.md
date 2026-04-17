@@ -84,6 +84,7 @@ Core tables:
 - `btc5m_reference_ticks`
 - `btc5m_reference_1m_ohlcv`
 - `btc5m_lifecycle_events`
+- `collector_runs`
 - `quality_audits`
 - `btc5m_features`
 - `btc5m_labels`
@@ -98,7 +99,7 @@ This setup path is written for a fresh clone on a Windows machine.
 Required:
 
 - Windows 10 or 11
-- Python 3.11
+- Python 3.11+
 - Git
 - PowerShell
 
@@ -163,7 +164,7 @@ If you prefer structured output:
 python scripts\btc5m_verify_setup.py --json
 ```
 
-### 7. Prepare collector-specific executables
+### 7. Prepare process-specific executables
 
 Recommended on Windows, and effectively required if you want VPN split tunneling by process name.
 
@@ -171,17 +172,26 @@ Recommended on Windows, and effectively required if you want VPN split tunneling
 powershell -ExecutionPolicy Bypass -File control\scripts\ensure_btc5m_process_exes.ps1
 ```
 
-Expected process names:
+Expected long-running collector process names:
 
 - `btc5m-scanner.exe`
 - `btc5m-reference.exe`
 - `btc5m-resolution.exe`
 
-Default Windows paths live under this repo's virtualenv:
+Expected periodic maintenance process names:
 
-- `%LocalAppData%\Python\pythoncore-3.14-64\btc5m-scanner.exe`
-- `%LocalAppData%\Python\pythoncore-3.14-64\btc5m-reference.exe`
-- `%LocalAppData%\Python\pythoncore-3.14-64\btc5m-resolution.exe`
+- `btc5m-healthcheck.exe`
+- `btc5m-dataset-audit.exe`
+- `btc5m-backup-dataset.exe`
+
+The script copies the resolved real CPython executable into BTC5M-specific image names next to that Python installation. If needed, override paths with:
+
+- `BTC5M_SCANNER_EXE_PATH`
+- `BTC5M_REFERENCE_EXE_PATH`
+- `BTC5M_RESOLUTION_EXE_PATH`
+- `BTC5M_HEALTHCHECK_EXE_PATH`
+- `BTC5M_AUDIT_EXE_PATH`
+- `BTC5M_BACKUP_EXE_PATH`
 
 ### 8. Start live data collection
 
@@ -205,8 +215,10 @@ powershell -ExecutionPolicy Bypass -File control\scripts\register_btc5m_collecti
 
 This registers:
 
+- a Startup folder entry that starts the collector monitor on user logon
 - health check every 5 minutes
 - dataset audit every 15 minutes
+- derived ETL every 15 minutes
 - backup every 6 hours
 
 ### 10. Check whether the system is healthy
@@ -266,6 +278,18 @@ Status:
 powershell -ExecutionPolicy Bypass -File control\scripts\btc5m_collection_control.ps1 -Action status
 ```
 
+Task Scheduler status:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File control\scripts\register_btc5m_collection_tasks.ps1 -Action status
+```
+
+Unregister Startup and scheduled tasks:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File control\scripts\register_btc5m_collection_tasks.ps1 -Action unregister
+```
+
 Operational summary:
 
 ```powershell
@@ -310,6 +334,12 @@ Build final decision dataset:
 
 ```powershell
 python scripts\btc5m_build_decision_dataset.py --dataset-version v1 --feature-version v1 --label-version v1
+```
+
+Run the same derived ETL flow used by Task Scheduler:
+
+```powershell
+control\scripts\run_btc5m_derived_etl.cmd
 ```
 
 Run a baseline backtest:
