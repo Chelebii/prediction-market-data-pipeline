@@ -1,7 +1,7 @@
 param(
     [ValidateSet('start','stop','restart','status')]
     [string]$Action = 'status',
-    [string]$Targets = 'scanner,reference,resolution'
+    [string]$Targets = 'scanner,reference,resolution,tradetick'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -48,6 +48,13 @@ $collectorMap = @{
         Lock = 'runtime\locks\btc5m_resolution_collector.lock'
         Pattern = 'btc5m_resolution_collector\.py'
         ExeKey = 'resolution'
+    }
+    'tradetick' = @{
+        Script = 'scripts\btc5m_trade_tick_collector.py'
+        WorkingDir = '.'
+        Lock = 'runtime\locks\btc5m_trade_tick_collector.lock'
+        Pattern = 'btc5m_trade_tick_collector\.py'
+        ExeKey = 'tradetick'
     }
 }
 

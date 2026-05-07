@@ -176,6 +176,10 @@ $processDefs = [ordered]@{
         env_var = 'BTC5M_RESOLUTION_EXE_PATH'
         file_name = 'btc5m-resolution.exe'
     }
+    tradetick = @{
+        env_var = 'BTC5M_TRADE_TICK_EXE_PATH'
+        file_name = 'btc5m-trade-tick.exe'
+    }
     healthcheck = @{
         env_var = 'BTC5M_HEALTHCHECK_EXE_PATH'
         file_name = 'btc5m-healthcheck.exe'

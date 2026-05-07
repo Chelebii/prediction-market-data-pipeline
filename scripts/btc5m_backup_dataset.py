@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import logging
 import os
+import shutil
 import sqlite3
 import sys
 import time
@@ -37,6 +39,11 @@ LATEST_METADATA_PATH = resolve_repo_path(
     default_path=ROOT_DIR / "runtime" / "backups" / "btc5m_backup_latest.json",
 )
 
+# Remote mirror (e.g. Google Drive Desktop folder). Optional.
+_remote_dir_env = os.getenv("BTC5M_BACKUP_REMOTE_DIR", "").strip()
+REMOTE_DIR: Path | None = Path(_remote_dir_env) if _remote_dir_env else None
+REMOTE_KEEP_COUNT = max(1, int(os.getenv("BTC5M_BACKUP_REMOTE_KEEP_COUNT", "1")))
+
 LOGGER = logging.getLogger("btc5m_backup_dataset")
 LOGGER.setLevel(logging.INFO)
 LOGGER.handlers.clear()
@@ -61,7 +68,18 @@ def atomic_write_text(path: Path, payload: str) -> None:
 
 
 def backup_meta_path(backup_path: Path) -> Path:
+    # backup_path may end in .db or .db.gz; meta sits next to it.
+    name = backup_path.name
+    if name.endswith(".db.gz"):
+        return backup_path.with_name(name[: -len(".db.gz")] + ".meta.json")
     return backup_path.with_suffix(".meta.json")
+
+
+def gzip_file(src_path: Path, dest_path: Path, compresslevel: int = 6) -> None:
+    """Compress src_path → dest_path using gzip, then remove src_path."""
+    with open(src_path, "rb") as src, gzip.open(dest_path, "wb", compresslevel=compresslevel) as dst:
+        shutil.copyfileobj(src, dst, length=64 * 1024 * 1024)
+    src_path.unlink(missing_ok=True)
 
 
 def validate_backup(backup_path: Path) -> tuple[bool, str]:
@@ -94,8 +112,62 @@ def write_backup_metadata(backup_path: Path, metadata: dict[str, object]) -> Non
     )
 
 
+def mirror_to_remote(local_backup_path: Path, local_meta_path: Path) -> None:
+    """Copy the compressed backup + meta file to REMOTE_DIR, then prune."""
+    if REMOTE_DIR is None:
+        return
+    try:
+        REMOTE_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        log(f"WARN remote_mkdir_failed | dir={REMOTE_DIR} | reason={exc}")
+        return
+
+    remote_backup = REMOTE_DIR / local_backup_path.name
+    remote_meta = REMOTE_DIR / local_meta_path.name
+    remote_tmp = REMOTE_DIR / (local_backup_path.name + ".tmp")
+    t0 = time.time()
+    try:
+        # Stage atomically: copy to .tmp then rename, so partial uploads aren't visible.
+        shutil.copyfile(local_backup_path, remote_tmp)
+        remote_tmp.replace(remote_backup)
+        shutil.copyfile(local_meta_path, remote_meta)
+    except OSError as exc:
+        log(f"WARN remote_copy_failed | reason={exc}")
+        try:
+            remote_tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return
+    elapsed = round(time.time() - t0, 1)
+    log(f"REMOTE_MIRROR | file={remote_backup.name} | dir={REMOTE_DIR} | secs={elapsed}")
+
+    # Prune remote
+    remote_backups = sorted(
+        list(REMOTE_DIR.glob("btc5m_dataset_*.db"))
+        + list(REMOTE_DIR.glob("btc5m_dataset_*.db.gz"))
+    )
+    if len(remote_backups) <= REMOTE_KEEP_COUNT:
+        return
+    for path in remote_backups[: len(remote_backups) - REMOTE_KEEP_COUNT]:
+        try:
+            path.unlink()
+            log(f"REMOTE_PRUNE | removed={path.name}")
+        except OSError as exc:
+            log(f"WARN remote_prune_failed | file={path.name} | reason={exc}")
+        meta_path = backup_meta_path(path)
+        if meta_path.exists():
+            try:
+                meta_path.unlink()
+                log(f"REMOTE_PRUNE | removed={meta_path.name}")
+            except OSError as exc:
+                log(f"WARN remote_prune_failed | file={meta_path.name} | reason={exc}")
+
+
 def prune_old_backups() -> None:
-    backups = sorted(BACKUP_DIR.glob("btc5m_dataset_*.db"))
+    backups = sorted(
+        list(BACKUP_DIR.glob("btc5m_dataset_*.db"))
+        + list(BACKUP_DIR.glob("btc5m_dataset_*.db.gz"))
+    )
     if len(backups) <= KEEP_COUNT:
         return
     for path in backups[: len(backups) - KEEP_COUNT]:
@@ -140,14 +212,23 @@ def main() -> None:
         log(f"ERROR validation_failed | file={temp_backup_path.name} | result={validation_result}")
         raise SystemExit(1)
 
-    temp_backup_path.replace(backup_path)
-    size_bytes = backup_path.stat().st_size if backup_path.exists() else 0
+    # Validation passed on temp_backup_path; now compress directly to .db.gz and drop the .db.
+    compressed_path = BACKUP_DIR / f"btc5m_dataset_{ts}.db.gz"
+    raw_size = temp_backup_path.stat().st_size
+    t0 = time.time()
+    gzip_file(temp_backup_path, compressed_path)
+    compress_secs = round(time.time() - t0, 1)
+    size_bytes = compressed_path.stat().st_size if compressed_path.exists() else 0
+    backup_path = compressed_path
     metadata = {
         "backup_name": backup_path.name,
         "backup_path": str(backup_path),
         "created_ts_utc": int(time.time()),
         "created_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "size_bytes": int(size_bytes),
+        "uncompressed_size_bytes": int(raw_size),
+        "compression": "gzip",
+        "compress_seconds": compress_secs,
         "source_db_path": str(db_path),
         "source_db_size_bytes": int(db_path.stat().st_size) if db_path.exists() else None,
         "retention_keep_count": KEEP_COUNT,
@@ -156,9 +237,10 @@ def main() -> None:
     }
     write_backup_metadata(backup_path, metadata)
     log(
-        "BACKUP | file=%s | size=%s | validation=%s | latest_pointer=%s | source=%s"
-        % (backup_path.name, size_bytes, validation_result, LATEST_METADATA_PATH.name, db_path)
+        "BACKUP | file=%s | size=%s (raw=%s) | gzip_secs=%s | validation=%s | source=%s"
+        % (backup_path.name, size_bytes, raw_size, compress_secs, validation_result, db_path)
     )
+    mirror_to_remote(backup_path, backup_meta_path(backup_path))
     prune_old_backups()
 
 

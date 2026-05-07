@@ -346,6 +346,33 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             "CREATE INDEX IF NOT EXISTS idx_btc5m_decision_dataset_split_bucket ON btc5m_decision_dataset(split_bucket)",
         ),
     },
+    "btc5m_trade_ticks": {
+        "columns": {
+            "trade_id": "INTEGER PRIMARY KEY AUTOINCREMENT",
+            "market_id": "TEXT NOT NULL",
+            "market_slug": "TEXT NOT NULL",
+            "ts_utc": "INTEGER NOT NULL",
+            "asset_token_id": "TEXT NOT NULL",
+            "outcome": "TEXT",
+            "side": "TEXT NOT NULL",
+            "price": "REAL NOT NULL",
+            "size": "REAL NOT NULL",
+            "notional": "REAL NOT NULL",
+            "transaction_hash": "TEXT NOT NULL",
+            "proxy_wallet": "TEXT",
+            "source_name": "TEXT NOT NULL",
+            "collected_ts": "INTEGER NOT NULL",
+            "meta_json": "TEXT",
+        },
+        "table_constraints": (
+            "FOREIGN KEY (market_id) REFERENCES btc5m_markets(market_id)",
+        ),
+        "indexes": (
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_btc5m_trade_ticks_unique ON btc5m_trade_ticks(transaction_hash, asset_token_id, side, price, size)",
+            "CREATE INDEX IF NOT EXISTS idx_btc5m_trade_ticks_market_ts ON btc5m_trade_ticks(market_id, ts_utc)",
+            "CREATE INDEX IF NOT EXISTS idx_btc5m_trade_ticks_ts ON btc5m_trade_ticks(ts_utc)",
+        ),
+    },
 }
 
 
@@ -452,6 +479,10 @@ def insert_orderbook_depth(conn: sqlite3.Connection, depth_row: Mapping[str, Any
 
 def insert_reference_tick(conn: sqlite3.Connection, reference_row: Mapping[str, Any]) -> int:
     return _insert_row(conn, "btc5m_reference_ticks", reference_row, or_ignore=True)
+
+
+def insert_trade_tick(conn: sqlite3.Connection, trade_row: Mapping[str, Any]) -> int:
+    return _insert_row(conn, "btc5m_trade_ticks", trade_row, or_ignore=True)
 
 
 def insert_reference_ohlcv(conn: sqlite3.Connection, candle_row: Mapping[str, Any]) -> int:

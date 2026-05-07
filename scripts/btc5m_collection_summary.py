@@ -59,6 +59,10 @@ RESOLUTION_LOCK = resolve_repo_path(
     os.getenv("BTC5M_RESOLUTION_LOCK_PATH"),
     default_path=ROOT_DIR / "runtime" / "locks" / "btc5m_resolution_collector.lock",
 )
+TRADETICK_LOCK = resolve_repo_path(
+    os.getenv("BTC5M_TRADE_TICK_LOCK_PATH"),
+    default_path=ROOT_DIR / "runtime" / "locks" / "btc5m_trade_tick_collector.lock",
+)
 
 MAX_SNAPSHOT_AGE_SEC = max(5, int(os.getenv("BTC5M_HEALTH_MAX_SNAPSHOT_AGE_SEC", "45")))
 MAX_REFERENCE_AGE_SEC = max(2, int(os.getenv("BTC5M_HEALTH_MAX_REFERENCE_AGE_SEC", "30")))
@@ -93,6 +97,11 @@ COLLECTOR_CONFIG = {
         "collector_name": "btc5m-resolution-collector",
         "lock_path": RESOLUTION_LOCK,
         "command_fragment": "btc5m_resolution_collector.py",
+    },
+    "tradetick": {
+        "collector_name": "btc5m-trade-tick-collector",
+        "lock_path": TRADETICK_LOCK,
+        "command_fragment": "btc5m_trade_tick_collector.py",
     },
     "audit": {
         "collector_name": "btc5m-dataset-audit",
@@ -450,16 +459,20 @@ def build_summary() -> dict[str, Any]:
             "orderbook_depth": table_count(conn, "btc5m_orderbook_depth"),
             "lifecycle_events": table_count(conn, "btc5m_lifecycle_events"),
             "quality_audits": table_count(conn, "quality_audits"),
+            "trade_ticks": table_count(conn, "btc5m_trade_ticks"),
         }
 
         latest_snapshot_ts = latest_scalar(conn, "SELECT MAX(collected_ts) FROM btc5m_snapshots")
         latest_reference_ts = latest_scalar(conn, "SELECT MAX(ts_utc) FROM btc5m_reference_ticks")
+        latest_trade_tick_ts = latest_scalar(conn, "SELECT MAX(ts_utc) FROM btc5m_trade_ticks")
         audit_summary = latest_audit_summary(conn)
         summary["freshness"]["snapshot_last_ts"] = int(latest_snapshot_ts) if latest_snapshot_ts is not None else None
         summary["freshness"]["reference_last_ts"] = int(latest_reference_ts) if latest_reference_ts is not None else None
+        summary["freshness"]["trade_tick_last_ts"] = int(latest_trade_tick_ts) if latest_trade_tick_ts is not None else None
         summary["freshness"]["audit_last_ts"] = int(audit_summary["audit_ts"]) if audit_summary and audit_summary.get("audit_ts") is not None else None
         summary["freshness"]["snapshot_age_sec"] = safe_age(now_ts, latest_snapshot_ts)
         summary["freshness"]["reference_age_sec"] = safe_age(now_ts, latest_reference_ts)
+        summary["freshness"]["trade_tick_age_sec"] = safe_age(now_ts, latest_trade_tick_ts)
         summary["freshness"]["audit_age_sec"] = safe_age(now_ts, audit_summary["audit_ts"] if audit_summary else None)
         summary["audit"] = audit_summary
         scanner_started_ts = latest_collector_started_ts(conn, "btc5m-clob-scanner")
@@ -579,7 +592,7 @@ def print_text_summary(summary: dict[str, Any]) -> None:
     print("")
 
     print("Collectors")
-    for label in ("scanner", "reference", "resolution", "audit"):
+    for label in ("scanner", "reference", "resolution", "tradetick", "audit"):
         collector = summary["collectors"].get(label) or {}
         run_info = collector.get("latest_run") or {}
         recent_error = collector.get("recent_error") or {}
@@ -598,7 +611,7 @@ def print_text_summary(summary: dict[str, Any]) -> None:
     print(
         f"- markets={counts.get('markets', 0)} snapshots={counts.get('snapshots', 0)} "
         f"reference_ticks={counts.get('reference_ticks', 0)} orderbook_depth={counts.get('orderbook_depth', 0)} "
-        f"lifecycle_events={counts.get('lifecycle_events', 0)}"
+        f"lifecycle_events={counts.get('lifecycle_events', 0)} trade_ticks={counts.get('trade_ticks', 0)}"
     )
 
     print("")
@@ -606,6 +619,7 @@ def print_text_summary(summary: dict[str, Any]) -> None:
     print(
         f"- snapshot_db={format_age(freshness.get('snapshot_age_sec'))} "
         f"reference_db={format_age(freshness.get('reference_age_sec'))} "
+        f"trade_tick_db={format_age(freshness.get('trade_tick_age_sec'))} "
         f"audit={format_age(freshness.get('audit_age_sec'))} "
         f"snapshot_file={format_age(freshness.get('snapshot_file_age_sec'))}"
     )
