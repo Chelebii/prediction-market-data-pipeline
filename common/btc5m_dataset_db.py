@@ -376,10 +376,6 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
 }
 
 
-def default_db_path() -> Path:
-    return DEFAULT_DB_PATH
-
-
 def resolve_repo_path(
     path_value: Optional[os.PathLike[str] | str] = None,
     *,
@@ -479,10 +475,6 @@ def insert_orderbook_depth(conn: sqlite3.Connection, depth_row: Mapping[str, Any
 
 def insert_reference_tick(conn: sqlite3.Connection, reference_row: Mapping[str, Any]) -> int:
     return _insert_row(conn, "btc5m_reference_ticks", reference_row, or_ignore=True)
-
-
-def insert_trade_tick(conn: sqlite3.Connection, trade_row: Mapping[str, Any]) -> int:
-    return _insert_row(conn, "btc5m_trade_ticks", trade_row, or_ignore=True)
 
 
 def insert_reference_ohlcv(conn: sqlite3.Connection, candle_row: Mapping[str, Any]) -> int:

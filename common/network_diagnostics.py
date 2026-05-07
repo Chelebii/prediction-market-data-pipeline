@@ -62,13 +62,6 @@ def is_network_reason(reason: object) -> bool:
     )
 
 
-def build_network_alert_message(component: str, reason: object, *, extra: Optional[str] = None) -> str:
-    pieces = [f"{component} detected a network/VPN issue", f"error={reason}"]
-    if extra:
-        pieces.append(str(extra))
-    return " | ".join(pieces)
-
-
 def note_network_alert_state(
     state_key: str,
     reason: object,

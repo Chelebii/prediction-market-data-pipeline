@@ -23,7 +23,6 @@ if str(ROOT_DIR) not in sys.path:
 from common.btc5m_dataset_db import (
     connect_db,
     finish_collector_run,
-    insert_trade_tick,
     resolve_db_path,
     resolve_repo_path,
     start_collector_run,

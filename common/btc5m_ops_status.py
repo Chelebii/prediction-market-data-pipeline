@@ -6,11 +6,6 @@ import json
 import sqlite3
 from typing import Any, Optional
 
-EXCLUDED_AUDIT_NOTE_PREFIXES = (
-    "active_market_excluded",
-    "partial_startup_excluded",
-)
-
 UPTIME_STRONG_RATIO = 0.95
 UPTIME_GOOD_RATIO = 0.90
 UPTIME_CAUTION_RATIO = 0.80
@@ -239,21 +234,6 @@ def classify_uptime_ratio(ratio: Any) -> dict[str, Any]:
         "band": band,
         "message": message,
     }
-
-
-def collector_has_recent_error(
-    run_info: Optional[dict[str, Any]],
-    *,
-    now_ts: int,
-    recent_window_sec: int,
-) -> bool:
-    return bool(
-        collector_recent_error_state(
-            run_info,
-            now_ts=now_ts,
-            recent_window_sec=recent_window_sec,
-        )["active"]
-    )
 
 
 def collector_recent_error_state(
