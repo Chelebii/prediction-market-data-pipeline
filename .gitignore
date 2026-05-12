@@ -28,5 +28,6 @@ logs/automation/
 *.db-wal
 .vscode/
 .idea/
+.claude/
 Thumbs.db
 Desktop.ini

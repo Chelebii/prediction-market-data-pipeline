@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import logging
 import os
 import sqlite3
@@ -32,6 +30,7 @@ from common.btc5m_dataset_db import (
     start_collector_run,
     update_collector_run,
 )
+from common.config_hash import stable_config_hash
 from common.single_instance import acquire_single_instance_lock
 
 load_dotenv(ROOT_DIR / "polymarket_scanner" / ".env")
@@ -106,8 +105,7 @@ def collector_config_hash(args: argparse.Namespace) -> str:
         "snapshot_outage_gap_sec": SNAPSHOT_OUTAGE_GAP_SEC,
         "reference_outage_gap_sec": REFERENCE_OUTAGE_GAP_SEC,
     }
-    encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return stable_config_hash(payload)
 
 
 def load_candidate_markets(

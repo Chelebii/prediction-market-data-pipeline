@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import logging
 import os
 import sqlite3
@@ -41,6 +39,7 @@ from common.btc5m_trade_tick_feed import (
     normalize_trade_row,
 )
 from common.bot_notify import send_alert
+from common.config_hash import stable_config_hash
 from common.network_diagnostics import (
     build_network_intervention_message,
     clear_network_alert_state,
@@ -137,8 +136,7 @@ def collector_config_hash(args: argparse.Namespace, *, mode: str, max_markets: i
         "to_ts": int(args.to_ts or 0),
         "db_path": str(resolve_db_path()),
     }
-    encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return stable_config_hash(payload)
 
 
 def load_live_markets(

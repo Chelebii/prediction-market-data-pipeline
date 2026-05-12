@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import logging
 import os
 import sqlite3
@@ -20,7 +18,15 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from common.btc5m_dataset_db import connect_db, finish_collector_run, resolve_db_path, start_collector_run, update_collector_run
+from common.btc5m_dataset_db import (
+    connect_db,
+    finish_collector_run,
+    resolve_db_path,
+    resolve_repo_path,
+    start_collector_run,
+    update_collector_run,
+)
+from common.config_hash import stable_config_hash
 from common.single_instance import acquire_single_instance_lock
 
 load_dotenv(ROOT_DIR / "polymarket_scanner" / ".env")
@@ -31,8 +37,14 @@ COLLECTOR_VERSION = "2026-03-15"
 DEFAULT_LABEL_VERSION = str(os.getenv("BTC5M_LABEL_VERSION", "v1")).strip() or "v1"
 LOOKBACK_HOURS = max(1, int(os.getenv("BTC5M_LABEL_LOOKBACK_HOURS", "168")))
 MIN_DECISION_HORIZON_SEC = max(0, int(os.getenv("BTC5M_LABEL_MIN_DECISION_HORIZON_SEC", "5")))
-LOG_PATH = Path(os.getenv("BTC5M_LABEL_LOG_PATH", ROOT_DIR / "runtime" / "logs" / "btc5m_build_labels.log"))
-LOCK_PATH = Path(os.getenv("BTC5M_LABEL_LOCK_PATH", ROOT_DIR / "runtime" / "locks" / "btc5m_build_labels.lock"))
+LOG_PATH = resolve_repo_path(
+    os.getenv("BTC5M_LABEL_LOG_PATH"),
+    default_path=ROOT_DIR / "runtime" / "logs" / "btc5m_build_labels.log",
+)
+LOCK_PATH = resolve_repo_path(
+    os.getenv("BTC5M_LABEL_LOCK_PATH"),
+    default_path=ROOT_DIR / "runtime" / "locks" / "btc5m_build_labels.lock",
+)
 
 _logger = logging.getLogger("btc5m_build_labels")
 _logger.setLevel(logging.INFO)
@@ -70,8 +82,7 @@ def collector_config_hash(args: argparse.Namespace) -> str:
         "market_slug": str(args.market_slug or ""),
         "min_decision_horizon_sec": MIN_DECISION_HORIZON_SEC,
     }
-    encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return stable_config_hash(payload)
 
 
 def load_candidate_markets(

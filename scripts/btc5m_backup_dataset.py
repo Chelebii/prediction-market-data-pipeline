@@ -76,7 +76,7 @@ def backup_meta_path(backup_path: Path) -> Path:
 
 
 def gzip_file(src_path: Path, dest_path: Path, compresslevel: int = 6) -> None:
-    """Compress src_path → dest_path using gzip, then remove src_path."""
+    """Compress src_path to dest_path using gzip, then remove src_path."""
     with open(src_path, "rb") as src, gzip.open(dest_path, "wb", compresslevel=compresslevel) as dst:
         shutil.copyfileobj(src, dst, length=64 * 1024 * 1024)
     src_path.unlink(missing_ok=True)

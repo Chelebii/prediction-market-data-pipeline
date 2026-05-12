@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import logging
 import os
 import sqlite3
@@ -40,6 +38,7 @@ from common.btc5m_resolution_feed import (
     fetch_gamma_market_by_slug,
 )
 from common.bot_notify import send_alert
+from common.config_hash import stable_config_hash
 from common.network_diagnostics import (
     build_network_intervention_message,
     clear_network_alert_state,
@@ -111,8 +110,7 @@ def collector_config_hash(lookback_hours: int) -> str:
         "lookback_hours": lookback_hours,
         "db_path": str(resolve_db_path()),
     }
-    encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return stable_config_hash(payload)
 
 
 def load_candidate_markets(

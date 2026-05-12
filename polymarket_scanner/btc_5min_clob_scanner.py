@@ -6,7 +6,6 @@ BTC 5MIN CLOB-ONLY Scanner
 """
 
 import atexit
-import hashlib
 import json
 import logging
 import os
@@ -37,8 +36,8 @@ from common.btc5m_dataset_db import (
     update_collector_run,
     upsert_market,
 )
-from common.single_instance import acquire_single_instance_lock
 from common.bot_notify import send_alert
+from common.config_hash import stable_config_hash
 from common.network_diagnostics import (
     build_network_intervention_message,
     clear_network_alert_state,
@@ -46,6 +45,7 @@ from common.network_diagnostics import (
     is_network_reason,
     note_network_alert_state,
 )
+from common.single_instance import acquire_single_instance_lock
 
 SCANNER_DIR = ROOT_DIR / "polymarket_scanner"
 load_dotenv(SCANNER_DIR / ".env")
@@ -672,8 +672,7 @@ def scanner_config_hash() -> str:
         "snapshot_path": str(SNAPSHOT_PATH),
         "dataset_db_path": str(resolve_db_path()),
     }
-    encoded = json.dumps(config, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return stable_config_hash(config)
 
 
 def init_dataset_writer():

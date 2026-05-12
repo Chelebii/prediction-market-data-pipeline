@@ -164,7 +164,15 @@ If you prefer structured output:
 python scripts\btc5m_verify_setup.py --json
 ```
 
-### 7. Prepare process-specific executables
+### 7. Run unit tests
+
+```powershell
+python -m unittest discover -s tests
+```
+
+These tests cover shared configuration hashing, repo-relative path resolution, and feed normalization helpers.
+
+### 8. Prepare process-specific executables
 
 Recommended on Windows, and effectively required if you want VPN split tunneling by process name.
 
@@ -193,7 +201,7 @@ The script copies the resolved real CPython executable into BTC5M-specific image
 - `BTC5M_AUDIT_EXE_PATH`
 - `BTC5M_BACKUP_EXE_PATH`
 
-### 8. Start live data collection
+### 9. Start live data collection
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File control\scripts\btc5m_collection_control.ps1 -Action start
@@ -207,7 +215,7 @@ control\scripts\start_btc5m_collectors.cmd
 
 The control script is intended to be safe to re-run and should avoid duplicate long-running collectors.
 
-### 9. Register periodic tasks
+### 10. Register periodic tasks
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File control\scripts\register_btc5m_collection_tasks.ps1 -Action register
@@ -221,7 +229,7 @@ This registers:
 - derived ETL every 15 minutes
 - backup every 6 hours
 
-### 10. Check whether the system is healthy
+### 11. Check whether the system is healthy
 
 ```powershell
 python scripts\btc5m_collection_summary.py
@@ -234,7 +242,7 @@ What you want to see:
 - reference freshness is low
 - no urgent warnings
 
-### 11. Inspect the live data
+### 12. Inspect the live data
 
 Open `runtime/data/btc5m_dataset.db` in DB Browser for SQLite and look at:
 
@@ -354,7 +362,7 @@ python scripts\btc5m_run_backtest.py --dataset-version v1 --feature-version v1 -
 - setup is optimized for one always-on collection machine
 - VPN routing requirements depend on your jurisdiction and network setup
 - no packaged installer or container workflow is provided yet
-- no automated test suite is shipped yet; use `python scripts\btc5m_verify_setup.py` and the live operational summary for verification
+- automated tests are intentionally focused on shared business helpers; use `python scripts\btc5m_verify_setup.py` and the live operational summary for environment and runtime verification
 
 ## Public Repo Safety
 

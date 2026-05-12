@@ -22,7 +22,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from common.btc5m_backtest_engine import BacktestConfig, EntrySignal, Strategy, run_backtest
-from common.btc5m_dataset_db import connect_db, resolve_db_path
+from common.btc5m_dataset_db import connect_db, resolve_db_path, resolve_repo_path
 from common.single_instance import acquire_single_instance_lock
 
 load_dotenv(ROOT_DIR / "polymarket_scanner" / ".env")
@@ -31,9 +31,18 @@ load_dotenv()
 DEFAULT_DATASET_VERSION = str(os.getenv("BTC5M_DATASET_VERSION", "")).strip() or "v1__v1"
 DEFAULT_FEATURE_VERSION = str(os.getenv("BTC5M_FEATURE_VERSION", "v1")).strip() or "v1"
 LOOKBACK_HOURS = max(1, int(os.getenv("BTC5M_DATASET_LOOKBACK_HOURS", "168")))
-LOG_PATH = Path(os.getenv("BTC5M_BACKTEST_LOG_PATH", ROOT_DIR / "runtime" / "logs" / "btc5m_run_backtest.log"))
-LOCK_PATH = Path(os.getenv("BTC5M_BACKTEST_LOCK_PATH", ROOT_DIR / "runtime" / "locks" / "btc5m_run_backtest.lock"))
-OUTPUT_DIR = Path(os.getenv("BTC5M_BACKTEST_OUTPUT_DIR", ROOT_DIR / "runtime" / "backtests"))
+LOG_PATH = resolve_repo_path(
+    os.getenv("BTC5M_BACKTEST_LOG_PATH"),
+    default_path=ROOT_DIR / "runtime" / "logs" / "btc5m_run_backtest.log",
+)
+LOCK_PATH = resolve_repo_path(
+    os.getenv("BTC5M_BACKTEST_LOCK_PATH"),
+    default_path=ROOT_DIR / "runtime" / "locks" / "btc5m_run_backtest.lock",
+)
+OUTPUT_DIR = resolve_repo_path(
+    os.getenv("BTC5M_BACKTEST_OUTPUT_DIR"),
+    default_path=ROOT_DIR / "runtime" / "backtests",
+)
 
 _logger = logging.getLogger("btc5m_run_backtest")
 _logger.setLevel(logging.INFO)
